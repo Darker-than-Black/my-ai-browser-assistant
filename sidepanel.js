@@ -539,8 +539,9 @@ async function callGemini(onStatus) {
     const calls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
 
     if (calls.length) {
-      // Record the model's tool calls, run them, feed results back.
-      history.push({ role: "model", parts: calls.map((fc) => ({ functionCall: fc })) });
+      // Echo the model turn verbatim (keeps each part's thoughtSignature, which
+      // Gemini 3+ requires), then run the tools and feed results back.
+      history.push({ role: "model", parts });
       const responses = [];
       for (const fc of calls) {
         const lbl = Tools.label(fc.name, fc.args);
