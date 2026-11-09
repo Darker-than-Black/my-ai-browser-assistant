@@ -4,9 +4,9 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 // Single source of truth for selectable models (used by both selects).
 const MODELS = [
-  { id: "gemini-3.8-flash", label: "Flash 3.8 (швидка)" },
-  { id: "gemini-4-argon", label: "Argon 4 (флагман)" },
   { id: "gemini-3.5-flash-lite", label: "Flash-Lite 3.5 (економна)" },
+  { id: "gemini-3.8-flash", label: "Flash 3.8 (середня)" },
+  { id: "gemini-4-argon", label: "Argon 4 (флагман)" },
 ];
 const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
@@ -59,6 +59,10 @@ let autoContext = true;
 // a screenshot with each request. Off by default (debugger shows a banner).
 let eyesOn = false;
 
+// In-flight request controller, so the Stop button can abort it.
+let currentController = null;
+let stopRequested = false;
+
 // Abort only if the stream stalls (no bytes) for this long — not a total-time
 // cap, so slow-but-progressing answers are never cut off.
 const REQUEST_IDLE_MS = 45000;
@@ -86,6 +90,7 @@ async function init() {
   if (!settings.apiKey) showSettings(true);
 
   wireEvents();
+  updateSendButton();
   await resolveBoundTab();
   ensureAssistantGroup();
   updateContextBadge();
@@ -186,7 +191,8 @@ async function onQuickModelChange() {
 }
 
 function wireEvents() {
-  els.sendBtn.addEventListener("click", onSend);
+  els.sendBtn.addEventListener("click", onSendClick);
+  els.input.addEventListener("input", updateSendButton);
   els.input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); }
   });
