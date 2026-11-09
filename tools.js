@@ -280,6 +280,13 @@ const Tools = (() => {
               const el = [...document.querySelectorAll('a, button, [role="button"], input[type="submit"]')]
                 .find((e) => ((e.innerText || e.textContent || e.value || "").trim().toLowerCase().includes(needle)));
               if (!el) return { clicked: false };
+              try {
+                el.scrollIntoView({ block: "center", behavior: "smooth" });
+                const prev = el.style.outline;
+                el.style.outline = "3px solid #38bdf8";
+                el.style.outlineOffset = "2px";
+                setTimeout(() => { el.style.outline = prev; }, 1200);
+              } catch (_) {}
               el.click();
               return { clicked: true, text: (el.innerText || el.textContent || "").trim().slice(0, 80) };
             },
@@ -312,6 +319,13 @@ const Tools = (() => {
               if (!el && vis.includes(document.activeElement)) el = document.activeElement;
               if (!el) el = vis[0];
               if (!el) return { typed: false };
+              try {
+                el.scrollIntoView({ block: "center", behavior: "smooth" });
+                const prev = el.style.outline;
+                el.style.outline = "3px solid #38bdf8";
+                el.style.outlineOffset = "2px";
+                setTimeout(() => { el.style.outline = prev; }, 1200);
+              } catch (_) {}
               el.focus();
               if (el.isContentEditable) {
                 el.textContent = txt;

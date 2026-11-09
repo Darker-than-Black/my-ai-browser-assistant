@@ -34,6 +34,12 @@ const els = {
   contextBtn: document.getElementById("context-btn"),
   eyesBtn: document.getElementById("eyes-btn"),
   themeBtn: document.getElementById("theme-btn"),
+  confirmBtn: document.getElementById("confirm-btn"),
+  recordBtn: document.getElementById("record-btn"),
+  macroSelect: document.getElementById("macro-select"),
+  macroPlay: document.getElementById("macro-play"),
+  sessionSelect: document.getElementById("session-select"),
+  newSessionBtn: document.getElementById("new-session-btn"),
   contextBadge: document.getElementById("context-badge"),
   clearBtn: document.getElementById("clear-btn"),
   settingsBtn: document.getElementById("settings-btn"),
@@ -48,7 +54,10 @@ const els = {
 
 // ---- State ----
 let settings = { apiKey: "", model: DEFAULT_MODEL };
-let history = []; // [{ role: 'user'|'model', parts: [...] }]
+let history = []; // [{ role: 'user'|'model', parts: [...] }] — the API conversation
+let transcript = []; // display items for re-render: {role:'user',text,imgCount}|{role:'gemini',text,tokens}
+let sessions = {}; // id -> { id, title, updatedAt, history, transcript }
+let sessionId = null; // active session id
 let pendingImages = []; // [{ mimeType, data(base64), url }]
 let pageContext = null; // { url, title, text } or null
 let busy = false;
@@ -77,6 +86,18 @@ let eyesOn = false;
 let currentController = null;
 let stopRequested = false;
 
+// Ask the user to approve each state-changing tool call (click/type/navigate/
+// run_js) before it runs. Off by default (would make agentic browsing noisy);
+// toggled with the ✋ button, persisted. Read-only tools never ask.
+let confirmActions = false;
+let pendingConfirm = null; // { resolve } while a confirm card is open
+
+// Macro recording: capture executed tool calls so a sequence can be replayed
+// without the model. Toggled with 🎬. Saved macros live in storage.local.
+let recording = false;
+let recordedCalls = []; // [{ name, args }] during a recording
+let macros = {}; // name -> [{ name, args }]
+
 // Abort only if the stream stalls (no bytes) for this long — not a total-time
 // cap, so slow-but-progressing answers are never cut off.
 const REQUEST_IDLE_MS = 60000;
@@ -94,12 +115,29 @@ init();
 async function init() {
   populateModelSelects();
 
-  const stored = await chrome.storage.local.get(["apiKey", "model", "theme"]);
+  const stored = await chrome.storage.local.get([
+    "apiKey", "model", "theme", "confirmActions", "macros",
+    "sessions", "activeSessionId",
+  ]);
   settings.apiKey = stored.apiKey || "";
   settings.model = modelExists(stored.model) ? stored.model : DEFAULT_MODEL;
   els.apiKeyInput.value = settings.apiKey;
   els.modelSelect.value = settings.model;
   els.modelQuick.value = settings.model;
+
+  confirmActions = !!stored.confirmActions;
+  els.confirmBtn.classList.toggle("active", confirmActions);
+  macros = stored.macros || {};
+  populateMacros();
+
+  // Restore chat sessions. Open the last active one, or start a fresh session.
+  sessions = stored.sessions || {};
+  if (stored.activeSessionId && sessions[stored.activeSessionId]) {
+    loadSessionInto(stored.activeSessionId);
+  } else {
+    await newSession(false); // false = nothing to persist from yet
+  }
+  populateSessions();
 
   initTheme(stored.theme);
   if (!settings.apiKey) showSettings(true);
@@ -273,6 +311,11 @@ function wireEvents() {
   els.contextBtn.addEventListener("click", toggleAutoContext);
   els.eyesBtn.addEventListener("click", toggleEyes);
   els.themeBtn.addEventListener("click", cycleTheme);
+  els.confirmBtn.addEventListener("click", toggleConfirm);
+  els.recordBtn.addEventListener("click", toggleRecord);
+  els.macroPlay.addEventListener("click", playSelectedMacro);
+  els.sessionSelect.addEventListener("change", (e) => switchSession(e.target.value));
+  els.newSessionBtn.addEventListener("click", () => newSession(true));
   window.addEventListener("pagehide", () => { if (eyesOn) Eyes.detach(); });
   els.clearBtn.addEventListener("click", clearChat);
   els.settingsBtn.addEventListener("click", () => showSettings(els.settingsView.classList.contains("hidden")));
@@ -301,6 +344,104 @@ async function cycleTheme() {
   const t = THEMES[themeIdx];
   applyTheme(t);
   await chrome.storage.local.set({ theme: t });
+}
+
+// ---- Confirm actions toggle ----
+async function toggleConfirm() {
+  confirmActions = !confirmActions;
+  els.confirmBtn.classList.toggle("active", confirmActions);
+  await chrome.storage.local.set({ confirmActions });
+  log("confirmActions:", confirmActions);
+}
+
+// ---- Macros (record / replay tool-call sequences) ----
+function toggleRecord() {
+  if (recording) {
+    recording = false;
+    els.recordBtn.classList.remove("active");
+    const calls = recordedCalls.slice();
+    recordedCalls = [];
+    if (!calls.length) return;
+    const name = (window.prompt(`Зберегти макрос (${calls.length} дій) як:`, "") || "").trim();
+    if (name) saveMacro(name, calls);
+  } else {
+    recording = true;
+    recordedCalls = [];
+    els.recordBtn.classList.add("active");
+  }
+}
+
+async function saveMacro(name, calls) {
+  macros[name] = calls;
+  await chrome.storage.local.set({ macros });
+  populateMacros();
+  els.macroSelect.value = name;
+  updateMacroControls();
+}
+
+function populateMacros() {
+  const names = Object.keys(macros);
+  els.macroSelect.innerHTML = "";
+  if (!names.length) {
+    const opt = document.createElement("option");
+    opt.textContent = "макроси —";
+    opt.value = "";
+    els.macroSelect.appendChild(opt);
+  } else {
+    for (const n of names) {
+      const opt = document.createElement("option");
+      opt.value = n;
+      opt.textContent = "▶ " + n;
+      els.macroSelect.appendChild(opt);
+    }
+  }
+  updateMacroControls();
+}
+
+function updateMacroControls() {
+  const has = Object.keys(macros).length > 0;
+  els.macroPlay.disabled = !has || busy;
+  els.macroSelect.disabled = !has || busy;
+}
+
+function playSelectedMacro() {
+  const name = els.macroSelect.value;
+  if (name && macros[name]) runMacro(name, macros[name]);
+}
+
+// Replay a recorded sequence directly through the tools — no model in the loop.
+async function runMacro(name, calls) {
+  if (busy || !calls?.length) return;
+  setBusy(true);
+  setGroupState("busy");
+  const typingEl = appendTyping();
+  const onStep = (label) => {
+    const el = document.createElement("div");
+    el.className = "msg tool-log";
+    el.textContent = "▶ " + label;
+    els.chatLog.insertBefore(el, typingEl);
+    scrollDown();
+  };
+  try {
+    let n = 0;
+    for (const c of calls) {
+      if (stopRequested) break;
+      onStep(Tools.label(c.name, c.args || {}));
+      const r = await Tools.exec(c.name, c.args || {});
+      if (r && r.error) onStep("⚠️ " + r.error);
+      n++;
+    }
+    removeTyping(typingEl);
+    appendMessage(`Макрос «${name}» відтворено (${n}/${calls.length} дій).`, "gemini");
+    setGroupState("done");
+  } catch (err) {
+    removeTyping(typingEl);
+    appendErrorMessage(err, null);
+    setGroupState("error");
+  } finally {
+    stopRequested = false;
+    setBusy(false);
+  }
 }
 
 // ---- Settings ----
@@ -442,12 +583,145 @@ async function readPinnedTab() {
 // ---- Chat ----
 function clearChat() {
   history = [];
+  transcript = [];
   pendingImages = [];
   pageContext = null;
   updateContextBadge();
   renderAttachments();
   els.chatLog.innerHTML = '<div class="msg gemini">Чат очищено. Чим можу допомогти?</div>';
   updateSendButton();
+  persistActive();
+}
+
+// ---- Sessions (persistent, multi-chat) ----
+const WELCOME_HTML = '<div class="msg gemini">Вітаю! Чим можу допомогти на цій сторінці?</div>';
+
+function newId() {
+  return "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// History trimmed for storage: drop image bytes and keep only recent turns.
+function persistableHistory() {
+  return history.slice(-40).map((turn) => ({
+    role: turn.role,
+    parts: (turn.parts || []).filter(
+      (p) => !(p.inlineData && /^image\//.test(p.inlineData.mimeType || ""))
+    ),
+  }));
+}
+
+function sessionTitle() {
+  const firstUser = transcript.find((t) => t.role === "user" && t.text);
+  if (firstUser) return firstUser.text.slice(0, 40);
+  return "Новий чат";
+}
+
+function persistActive() {
+  if (!sessionId) return;
+  sessions[sessionId] = {
+    id: sessionId,
+    title: sessionTitle(),
+    updatedAt: Date.now(),
+    history: persistableHistory(),
+    transcript: transcript.slice(-80),
+  };
+  chrome.storage.local.set({ sessions, activeSessionId: sessionId });
+  populateSessions();
+}
+
+function loadSessionInto(id) {
+  const s = sessions[id];
+  if (!s) return;
+  sessionId = id;
+  history = (s.history || []).map((t) => ({ role: t.role, parts: (t.parts || []).slice() }));
+  transcript = (s.transcript || []).slice();
+  renderTranscript();
+}
+
+async function newSession(persistCurrent) {
+  if (persistCurrent) persistActive();
+  sessionId = newId();
+  history = [];
+  transcript = [];
+  sessions[sessionId] = {
+    id: sessionId,
+    title: "Новий чат",
+    updatedAt: Date.now(),
+    history: [],
+    transcript: [],
+  };
+  pendingImages = [];
+  pageContext = null;
+  renderAttachments();
+  updateContextBadge();
+  els.chatLog.innerHTML = WELCOME_HTML;
+  updateSendButton();
+  await chrome.storage.local.set({ sessions, activeSessionId: sessionId });
+  populateSessions();
+}
+
+function switchSession(id) {
+  if (busy) { els.sessionSelect.value = sessionId; return; } // no switch mid-request
+  if (!id || id === sessionId) return;
+  persistActive();
+  loadSessionInto(id);
+  chrome.storage.local.set({ activeSessionId: sessionId });
+  populateSessions();
+}
+
+function populateSessions() {
+  const list = Object.values(sessions).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  els.sessionSelect.innerHTML = "";
+  for (const s of list) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = s.title || "Новий чат";
+    els.sessionSelect.appendChild(opt);
+  }
+  if (sessionId) els.sessionSelect.value = sessionId;
+}
+
+// Rebuild the chat log from the saved display transcript.
+function renderTranscript() {
+  els.chatLog.innerHTML = "";
+  if (!transcript.length) {
+    els.chatLog.innerHTML = WELCOME_HTML;
+    updateSendButton();
+    return;
+  }
+  for (const item of transcript) {
+    if (item.role === "user") {
+      const div = document.createElement("div");
+      div.className = "msg user";
+      if (item.text) {
+        const p = document.createElement("div");
+        p.textContent = item.text;
+        div.appendChild(p);
+      }
+      if (item.imgCount) {
+        const note = document.createElement("div");
+        note.className = "img-note";
+        note.textContent = `🖼️ ${item.imgCount} зобр.`;
+        div.appendChild(note);
+      }
+      els.chatLog.appendChild(div);
+    } else {
+      appendGemini(item.text, item.tokens);
+    }
+  }
+  scrollDown();
+  updateSendButton();
+}
+
+// Build a finished model bubble (used when restoring a saved transcript).
+function appendGemini(text, tokens) {
+  const div = document.createElement("div");
+  div.className = "msg gemini";
+  div.innerHTML = renderMarkdown(text);
+  addCopyButtons(div, text);
+  if (tokens) appendUsage(div, { totalTokenCount: tokens });
+  els.chatLog.appendChild(div);
+  return div;
 }
 
 async function onSend() {
@@ -498,6 +772,7 @@ async function onSend() {
 
   // Render user bubble (show the typed text + thumbnails, not the injected context)
   renderUserBubble(text, pendingImages);
+  transcript.push({ role: "user", text, imgCount: pendingImages.length });
 
   // Reset input/attachments
   els.input.value = "";
@@ -541,18 +816,23 @@ async function runTurn(parts) {
     },
     reset: () => startDots(typingEl),
     usage: (u) => { if (u) lastUsage = u; },
+    confirm: (fc) => requestConfirm(fc, typingEl),
   };
 
   try {
     const { text: reply, usage } = await callGemini(onStep, live);
-    finalizeStream(typingEl, reply, usage || lastUsage);
+    const u = usage || lastUsage;
+    finalizeStream(typingEl, reply, u);
     history.push({ role: "model", parts: [{ text: reply }] });
+    transcript.push({ role: "gemini", text: reply, tokens: u?.totalTokenCount || 0 });
+    persistActive();
     setGroupState("done");
   } catch (err) {
     removeTyping(typingEl);
     if (err.keepHistory) {
       // Step limit: keep tool context so "Продовжити" resumes; no retry button.
       appendErrorMessage(err, null);
+      persistActive(); // keep the tool context across reloads
       setGroupState("idle");
     } else {
       history.length = baseLen; // drop the user turn and any tool turns added
@@ -789,8 +1069,11 @@ async function geminiStream(onToken, onInfo) {
 
 // Agentic loop: let the model call browser tools until it returns a final
 // answer. onStep(label) logs each tool step as a persistent line in the chat.
+const MUTATING = new Set(["click", "type", "navigate", "run_js"]);
+
 async function callGemini(onStep, live) {
   const seen = new Map(); // tool-call signature -> count, to break loops
+  let autoApprove = false; // "Завжди" within this turn skips later confirms
 
   for (let i = 0; i < MAX_TOOL_STEPS; i++) {
     live && live.reset(); // show the "typing" dots while this model turn streams
@@ -822,8 +1105,23 @@ async function callGemini(onStep, live) {
               "You already called this twice with identical arguments. Change your " +
               "approach (different URL/text/field) or give a final answer from the data you have.",
           };
+        } else if (confirmActions && !autoApprove && MUTATING.has(fc.name) && live && live.confirm) {
+          const decision = await live.confirm(fc);
+          if (decision === "stop") { stopRequested = true; throw makeAbortError(); }
+          if (decision === "deny") {
+            result = {
+              error:
+                "Користувач відхилив цю дію. Не повторюй її — запропонуй інший підхід " +
+                "або спитай користувача, що робити далі.",
+            };
+          } else {
+            if (decision === "always") autoApprove = true;
+            result = await Tools.exec(fc.name, fc.args || {});
+            recordCall(fc);
+          }
         } else {
           result = await Tools.exec(fc.name, fc.args || {});
+          recordCall(fc);
         }
         // A screenshot can't live inside functionResponse — send it as an image
         // part in the same turn so the model actually sees the page.
@@ -1055,6 +1353,7 @@ function hasModelTurn() {
 function updateSendButton() {
   const btn = els.sendBtn;
   els.modelQuick.disabled = busy; // no model switch mid-request
+  updateMacroControls(); // disable play/select while a request or replay runs
   els.modelQuick.title = busy ? "Зачекайте завершення запиту" : "Модель";
   if (busy) {
     btn.dataset.mode = "stop";
@@ -1080,10 +1379,63 @@ function onSendClick() {
 }
 
 function stopGeneration() {
-  if (!busy || !currentController) return;
+  if (!busy) return;
   stopRequested = true;
-  currentController.abort();
+  // If a confirmation card is open, resolve it as a stop; otherwise abort the
+  // in-flight stream.
+  if (pendingConfirm) { pendingConfirm.resolve("stop"); return; }
+  if (currentController) currentController.abort();
   log("stop requested");
+}
+
+// Render an inline approval card for a state-changing tool call and wait for the
+// user's choice: "allow" | "deny" | "always" | "stop".
+function requestConfirm(fc, anchorEl) {
+  stopDots(anchorEl);
+  return new Promise((resolve) => {
+    const card = document.createElement("div");
+    card.className = "msg confirm";
+
+    const q = document.createElement("div");
+    q.className = "confirm-q";
+    q.textContent = "Дозволити дію агента?";
+    const detail = document.createElement("div");
+    detail.className = "confirm-detail";
+    detail.textContent = Tools.label(fc.name, fc.args || {});
+    card.append(q, detail);
+
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const done = (decision) => {
+      if (pendingConfirm !== holder) return;
+      pendingConfirm = null;
+      card.remove();
+      startDots(anchorEl); // resume activity indicator
+      resolve(decision);
+    };
+    const mk = (label, val, cls) => {
+      const b = document.createElement("button");
+      b.className = "confirm-btn" + (cls ? " " + cls : "");
+      b.textContent = label;
+      b.addEventListener("click", () => done(val));
+      return b;
+    };
+    actions.append(
+      mk("✓ Дозволити", "allow", "ok"),
+      mk("Завжди", "always"),
+      mk("✕ Відхилити", "deny", "no")
+    );
+    card.appendChild(actions);
+
+    els.chatLog.insertBefore(card, anchorEl);
+    scrollDown();
+    const holder = { resolve: done };
+    pendingConfirm = holder;
+  });
+}
+
+function recordCall(fc) {
+  if (recording) recordedCalls.push({ name: fc.name, args: fc.args || {} });
 }
 
 // Continue the last answer where it left off (e.g. after Stop).

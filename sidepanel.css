@@ -87,6 +87,21 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
 /* Chat view */
 #chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
+.session-bar { display: flex; gap: 6px; margin-bottom: 8px; flex: 0 0 auto; }
+#session-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: var(--text-main);
+  cursor: pointer;
+}
+#session-select:focus { outline: none; border-color: var(--accent); }
+.img-note { font-size: 11px; opacity: 0.8; margin-top: 2px; }
+
 #chat-log {
   flex: 1;
   overflow-y: auto;
@@ -125,6 +140,18 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
   position: relative;
 }
 .msg code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.tok-c { color: #6b7280; font-style: italic; }
+.tok-s { color: #86efac; }
+.tok-n { color: #fbbf24; }
+.tok-k { color: #f0abfc; font-weight: 600; }
+:root[data-theme="light"] .tok-s { color: #15803d; }
+:root[data-theme="light"] .tok-n { color: #b45309; }
+:root[data-theme="light"] .tok-k { color: #a21caf; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .tok-s { color: #15803d; }
+  :root:not([data-theme="dark"]) .tok-n { color: #b45309; }
+  :root:not([data-theme="dark"]) .tok-k { color: #a21caf; }
+}
 .msg :not(pre) > code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
 
 /* Copy buttons (message + code block) and token note */
@@ -166,6 +193,39 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
   max-width: 100%;
   word-break: break-all;
 }
+
+/* Action confirmation card */
+.msg.confirm {
+  align-self: stretch;
+  max-width: 100%;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.confirm-q { font-weight: 600; margin-bottom: 4px; }
+.confirm-detail {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+.confirm-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.confirm-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+}
+.confirm-btn.ok { border-color: #22c55e; color: #22c55e; }
+.confirm-btn.no { border-color: #ef4444; color: #ef4444; }
+.confirm-btn:hover { background: var(--border-color); }
+
+/* Recording indicator */
+#record-btn.active { color: #ef4444; border-color: #ef4444; }
 
 /* Attachments preview */
 #attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }

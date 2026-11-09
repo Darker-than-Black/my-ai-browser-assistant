@@ -12,6 +12,7 @@
     <div class="header-actions">
       <button id="context-btn" class="icon-btn active" title="Автоконтекст: читати текст сторінки">📄</button>
       <button id="eyes-btn" class="icon-btn" title="Очі: консоль + мережа + скриншот (увага: вмикає налагодження, жовтий банер на вкладці)">👁️</button>
+      <button id="confirm-btn" class="icon-btn" title="Підтверджувати дії агента (клік/ввід/перехід) перед виконанням">✋</button>
       <button id="theme-btn" class="icon-btn" title="Тема: авто / темна / світла">🌓</button>
       <button id="clear-btn" class="icon-btn" title="Очистити чат">🗑️</button>
       <button id="settings-btn" class="icon-btn" title="Налаштування">⚙️</button>
@@ -35,6 +36,10 @@
 
   <!-- Chat view -->
   <section id="chat-view">
+    <div class="session-bar">
+      <select id="session-select" title="Збережені чати"></select>
+      <button id="new-session-btn" class="icon-btn" title="Новий чат">＋</button>
+    </div>
     <div id="chat-log">
       <div class="msg gemini">Вітаю! Чим можу допомогти на цій сторінці?</div>
     </div>
@@ -48,6 +53,9 @@
       <div class="input-controls">
         <button id="attach-btn" class="icon-btn" title="Додати зображення">🖼️</button>
         <input id="file-input" type="file" accept="image/*" multiple hidden />
+        <button id="record-btn" class="icon-btn" title="Записати макрос (послідовність дій агента)">🎬</button>
+        <select id="macro-select" class="model-quick" title="Макроси"></select>
+        <button id="macro-play" class="icon-btn" title="Відтворити вибраний макрос">▶</button>
         <span id="context-badge" class="badge hidden">+ сторінка</span>
         <select id="model-quick" class="model-quick" title="Модель"></select>
         <button id="send-btn" class="primary">Надіслати</button>
