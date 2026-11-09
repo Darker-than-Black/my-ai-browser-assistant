@@ -154,6 +154,15 @@ textarea:focus { outline: none; border-color: var(--accent); }
 .model-quick:focus { outline: none; border-color: var(--accent); }
 
 /* Error actions (retry / switch model) */
+.msg.error .err-raw {
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #fca5a5;
+  opacity: 0.8;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
 .msg.error .err-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .msg.error .err-btn {
   font-size: 12px;

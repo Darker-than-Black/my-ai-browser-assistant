@@ -390,15 +390,15 @@ async function onSend() {
   const ctx = [];
   if (pageContext) {
     ctx.push(
-      `Контекст активної сторінки:\nURL: ${pageContext.url}\nЗаголовок: ${pageContext.title}\n` +
-        `Текст:\n"""${pageContext.text}"""`
+      `Current page context:\nURL: ${pageContext.url}\nTitle: ${pageContext.title}\n` +
+        `Text:\n"""${pageContext.text}"""`
     );
   }
-  if (eyesShot) ctx.push("До запиту додано скриншот поточної вкладки.");
-  if (debugBlock) ctx.push("Дані DevTools цієї вкладки:\n" + debugBlock);
+  if (eyesShot) ctx.push("A screenshot of the current tab is attached.");
+  if (debugBlock) ctx.push("DevTools data for this tab:\n" + debugBlock);
 
   const promptText = ctx.length
-    ? ctx.join("\n\n") + `\n\n---\nЗапит користувача: ${text}`
+    ? ctx.join("\n\n") + `\n\n---\nUser request: ${text}`
     : text;
   if (promptText) parts.push({ text: promptText });
 
@@ -468,28 +468,27 @@ async function runTurn(parts) {
 // aborted only on a stall (no response for REQUEST_IDLE_MS) or a user Stop.
 const MAX_TOOL_STEPS = 25;
 
-const SYSTEM_PROMPT =
-  "Ти — браузерний АГЕНТ у бічній панелі Chrome з прямим доступом до прив'язаної " +
-  "вкладки через інструменти: read_page (вміст + посилання + controls/buttons), " +
-  "navigate (перейти за URL), click (клік по елементу за текстом), type (ввести " +
-  "текст і побачити автопідказки), look (СКРИНШОТ — побачити сторінку очима), " +
-  "read_console (консоль+мережа, лише коли увімкнено 👁️). " +
-  "Правила:\n" +
-  "1. Спершу коротко сплануй кроки подумки, потім виконуй їх САМ через інструменти. " +
-  "НІКОЛИ не відповідай у стилі «зробіть самостійно» — сам натискай фільтри, переходь, читай.\n" +
-  "2. Сайт — SPA: елементів фільтрів часто НЕ видно в тексті чи URL. НЕ ВГАДУЙ " +
-  "query-параметри. Працюй через UI: click по назві фільтра (напр. «Регіон»), потім " +
-  "look (скриншот), щоб ПОБАЧИТИ опції у списку, і click по потрібній опції за текстом.\n" +
-  "3. Якщо у фільтрі є пошук — type (ввести назву), потім look або читай підказки, й обери. " +
-  "look роби ОЩАДЛИВО — лише коли треба побачити щось, чого нема в read_page (щоб не " +
-  "вичерпати ліміт запитів).\n" +
-  "4. Після дії, що змінює вигляд, за потреби роби look, щоб переконатися в результаті. " +
-  "URL навмання не формуй — лише якщо впевнений у параметрах.\n" +
-  "5. Якщо інструмент повернув error або підхід не спрацював — зміни підхід, НЕ повторюй " +
-  "однаковий виклик.\n" +
-  "6. Продовжуй, поки не матимеш ТОЧНУ відповідь (напр. число результатів): прочитай " +
-  "сторінку результатів і назви точну цифру.\n" +
-  "7. Відповідай українською, стисло, лише коли маєш фактичний результат.";
+const SYSTEM_PROMPT = `You are an autonomous browser agent embedded in a Chrome side panel. You control one bound browser tab and can perceive and act on it only through the tools below.
+
+## Tools
+- read_page(): current URL, title, visible text, links (text + href), interactive controls (inputs, <select> options with their values, checkboxes), and visible button labels.
+- navigate(url): load an absolute URL in the tab, wait for load, return the new page.
+- click(text): click the first link/button whose visible text contains \`text\`; returns the resulting page.
+- type(text, into?): type into a field (optionally located by label/placeholder), return the page with any autocomplete suggestions.
+- look(): capture a screenshot and SEE the rendered page. For UI not present in the page text (open dropdowns, custom widgets, visual state).
+- read_console(): the tab's console logs and network requests; available only when the user has enabled eye mode.
+
+## How to work
+1. Act yourself with tools. Never tell the user to perform the steps manually.
+2. Target sites are usually SPAs: filter options are often NOT in the page text or URL. Do not guess query-string parameters. Drive the UI instead — click the filter (e.g. "Region"), then look() to see the options, then click the exact option by its visible text.
+3. For a searchable filter: type() the name, then look() or read the returned suggestions, then click the match.
+4. Use look() sparingly — only when you need to see something unavailable from read_page() — to avoid exhausting rate limits.
+5. If a tool returns an error or an approach fails, change approach. Never repeat an identical tool call.
+6. After an action that changes the view, verify with read_page() or look() that the intended state (e.g. applied filters) is actually in effect.
+7. Keep going until you have the EXACT answer requested (e.g. a result count): read the results page and report the precise number.
+
+## Output
+Reply in the user's language (Ukrainian), concisely, and only once you have a factual result. If, after genuine attempts, you truly cannot obtain it, state what you tried and what blocked you — do not fabricate.`;
 
 // Map an abort to the right error (user Stop vs idle stall).
 function makeAbortError() {
@@ -643,8 +642,8 @@ async function callGemini(onStep) {
         if (n >= 3) {
           result = {
             error:
-              "Ти вже викликав це двічі з тими самими аргументами. Зміни підхід " +
-              "(інший URL/текст/поле) або дай фінальну відповідь із наявних даних.",
+              "You already called this twice with identical arguments. Change your " +
+              "approach (different URL/text/field) or give a final answer from the data you have.",
           };
         } else {
           result = await Tools.exec(fc.name, fc.args || {});
@@ -690,6 +689,7 @@ function buildApiError(status, detail) {
   );
   err.status = status;
   err.retryable = overloaded;
+  err.raw = `HTTP ${status}: ${msg}`; // original message for the details line
   return err;
 }
 
@@ -734,6 +734,14 @@ function appendErrorMessage(err, parts) {
   const p = document.createElement("div");
   p.textContent = text;
   div.appendChild(p);
+
+  // Original underlying message, so the real problem is visible.
+  if (err.raw) {
+    const raw = document.createElement("div");
+    raw.className = "err-raw";
+    raw.textContent = err.raw;
+    div.appendChild(raw);
+  }
 
   if (parts && retryable) {
     const actions = document.createElement("div");
@@ -843,7 +851,7 @@ function stopGeneration() {
 async function onContinue() {
   if (busy || !hasModelTurn()) return;
   log("continue");
-  await runTurn([{ text: "Продовжуй відповідь з місця, де зупинився." }]);
+  await runTurn([{ text: "Continue from where you left off." }]);
 }
 
 function scrollDown() {

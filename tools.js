@@ -18,40 +18,40 @@ const Tools = (() => {
     {
       name: "read_page",
       description:
-        "Прочитати поточну сторінку прив'язаної вкладки: URL, заголовок, видимий текст і список посилань (текст + href). Використовуй, щоб побачити вміст і куди можна перейти.",
+        "Read the bound tab: URL, title, visible text, links (text + href), interactive controls (inputs, select options with values, checkboxes), and visible button labels. Use first to understand the page and where you can go.",
       parameters: { type: "object", properties: {} },
     },
     {
       name: "navigate",
       description:
-        "Перейти за абсолютним URL у прив'язаній вкладці, дочекатися завантаження і повернути вміст нової сторінки.",
+        "Navigate the bound tab to an absolute URL, wait for load, and return the new page content.",
       parameters: {
         type: "object",
-        properties: { url: { type: "string", description: "Повний URL (https://...)" } },
+        properties: { url: { type: "string", description: "Full URL, e.g. https://..." } },
         required: ["url"],
       },
     },
     {
       name: "click",
       description:
-        "Клікнути перше посилання/кнопку, видимий текст якого містить задану підрядку, дочекатися завантаження і повернути новий вміст сторінки.",
+        "Click the first link/button whose visible text contains the given substring, wait for load, and return the new page content.",
       parameters: {
         type: "object",
-        properties: { text: { type: "string", description: "Видимий текст елемента (частина)" } },
+        properties: { text: { type: "string", description: "Part of the element's visible text" } },
         required: ["text"],
       },
     },
     {
       name: "type",
       description:
-        "Ввести текст у поле вводу (пошук, фільтр) і повернути оновлену сторінку разом із підказками автозаповнення, що з'явилися. Спершу за потреби клікни, щоб відкрити потрібне поле/фільтр.",
+        "Type text into an input field (search/filter) and return the updated page including any autocomplete suggestions that appear. Click first if you need to open the field.",
       parameters: {
         type: "object",
         properties: {
-          text: { type: "string", description: "Текст для введення" },
+          text: { type: "string", description: "Text to type" },
           into: {
             type: "string",
-            description: "Частина label/placeholder поля; лишити порожнім — активне або перше видиме поле",
+            description: "Part of the field's label/placeholder; leave empty for the active or first visible field",
           },
         },
         required: ["text"],
@@ -60,13 +60,13 @@ const Tools = (() => {
     {
       name: "look",
       description:
-        "Зробити скриншот поточної сторінки і ПОБАЧИТИ її візуально. Використовуй, коли сайт — SPA і потрібних елементів немає в тексті/controls: напр. після click по фільтру, щоб побачити опції у випадаючому списку, і далі клікнути потрібну за текстом.",
+        "Take a screenshot and SEE the page visually. Use when the needed elements are not in the page text/controls: e.g. after clicking a filter, to see the dropdown options and then click the right one by text.",
       parameters: { type: "object", properties: {} },
     },
     {
       name: "read_console",
       description:
-        "Прочитати консоль і мережеві запити вкладки (помилки JS, виклики API). Працює лише коли увімкнено режим очей (кнопка 👁️).",
+        "Read the tab's console logs and network requests (JS errors, API calls). Works only when eye mode is enabled (the 👁️ button).",
       parameters: { type: "object", properties: {} },
     },
   ];
@@ -139,7 +139,7 @@ const Tools = (() => {
       func: pageSnapshotFn,
       args: [LINK_CAP, TEXT_CAP],
     });
-    return res?.result || { error: "Не вдалося прочитати сторінку" };
+    return res?.result || { error: "Failed to read the page" };
   }
 
   function waitComplete(tabId) {
@@ -162,7 +162,7 @@ const Tools = (() => {
   // ---- Executor ----
   async function exec(name, args) {
     const tabId = getTabId();
-    if (tabId == null) return { error: "Немає прив'язаної вкладки" };
+    if (tabId == null) return { error: "No bound tab" };
     try {
       switch (name) {
         case "read_page":
@@ -170,7 +170,7 @@ const Tools = (() => {
 
         case "navigate": {
           const url = String(args?.url || "");
-          if (!/^https?:\/\//.test(url)) return { error: "Потрібен повний URL (https://...)" };
+          if (!/^https?:\/\//.test(url)) return { error: "A full URL (https://...) is required" };
           await chrome.tabs.update(tabId, { url });
           await waitComplete(tabId);
           return await snapshot(tabId);
@@ -191,7 +191,7 @@ const Tools = (() => {
             args: [text],
           });
           const r = res?.result || { clicked: false };
-          if (!r.clicked) return { clicked: false, error: `Елемент з текстом "${text}" не знайдено` };
+          if (!r.clicked) return { clicked: false, error: `No element containing text "${text}" found` };
           await waitComplete(tabId);
           return { clicked: true, clickedText: r.text, page: await snapshot(tabId) };
         }
@@ -235,16 +235,16 @@ const Tools = (() => {
             args: [text, into],
           });
           const r = res?.result || { typed: false };
-          if (!r.typed) return { typed: false, error: "Поле вводу не знайдено" };
+          if (!r.typed) return { typed: false, error: "No input field found" };
           await new Promise((rsv) => setTimeout(rsv, 800)); // let suggestions load
           return { typed: true, field: r.field, page: await snapshot(tabId) };
         }
 
         case "look": {
           const tab = await chrome.tabs.get(tabId).catch(() => null);
-          if (!tab) return { error: "Вкладка недоступна" };
+          if (!tab) return { error: "Tab unavailable" };
           if (!tab.active) {
-            return { error: "Вкладка не активна — скриншот недоступний. Використай read_page." };
+            return { error: "Tab is not active; screenshot unavailable. Use read_page instead." };
           }
           try {
             const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
@@ -254,25 +254,25 @@ const Tools = (() => {
             // `image` is lifted out into an inlineData part by the caller.
             return {
               ok: true,
-              note: "Скриншот поточної сторінки додано нижче.",
+              note: "Screenshot of the current page is attached below.",
               image: { mimeType: "image/jpeg", data: String(dataUrl).split(",")[1] },
             };
           } catch (e) {
-            return { error: "Скриншот не вдався: " + (e?.message || e) };
+            return { error: "Screenshot failed: " + (e?.message || e) };
           }
         }
 
         case "read_console": {
           if (typeof Eyes === "undefined" || !Eyes.isAttached(tabId)) {
             return {
-              error: "Консоль не під'єднана. Користувач має увімкнути кнопку 👁️ у панелі.",
+              error: "Console is not attached. The user must enable the 👁️ button in the panel.",
             };
           }
-          return { ok: true, data: Eyes.debugText() || "(поки порожньо)" };
+          return { ok: true, data: Eyes.debugText() || "(empty for now)" };
         }
 
         default:
-          return { error: "Невідомий інструмент: " + name };
+          return { error: "Unknown tool: " + name };
       }
     } catch (err) {
       return { error: String(err?.message || err) };
