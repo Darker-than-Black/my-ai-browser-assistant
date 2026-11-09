@@ -50,6 +50,7 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
   line-height: 1;
 }
 .icon-btn:hover { background: var(--border-color); }
+.icon-btn.active { color: var(--accent); border-color: var(--accent); }
 
 /* Chat view */
 #chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }

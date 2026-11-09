@@ -19,6 +19,7 @@ const els = {
   fileInput: document.getElementById("file-input"),
   attachments: document.getElementById("attachments"),
   contextBtn: document.getElementById("context-btn"),
+  eyesBtn: document.getElementById("eyes-btn"),
   contextBadge: document.getElementById("context-badge"),
   clearBtn: document.getElementById("clear-btn"),
   settingsBtn: document.getElementById("settings-btn"),
@@ -48,7 +49,24 @@ const GROUP_STATES = {
   done: "✅ " + GROUP_NAME,
   error: "⚠️ " + GROUP_NAME,
 };
-let assistant = { groupId: null, windowId: null };
+let assistant = { groupId: null, windowId: null, tabId: null };
+
+// Auto-read the bound tab's page on every send so the model "sees" the page
+// without a manual toggle. Can be turned off with the 📄 button.
+let autoContext = true;
+
+// "Eyes": attach the debugger to the bound tab for console + network, and send
+// a screenshot with each request. Off by default (debugger shows a banner).
+let eyesOn = false;
+
+const REQUEST_TIMEOUT_MS = 90000;
+
+// Lightweight logger: timestamped lines in the devtools console of the panel
+// (right-click panel → Inspect) so a slow/stuck request is diagnosable.
+function log(...args) {
+  const t = new Date().toISOString().slice(11, 23);
+  console.log(`[assistant ${t}]`, ...args);
+}
 
 // ---- Init ----
 init();
@@ -66,7 +84,31 @@ async function init() {
   if (!settings.apiKey) showSettings(true);
 
   wireEvents();
+  await resolveBoundTab();
   ensureAssistantGroup();
+  updateContextBadge();
+}
+
+// The tab the panel was opened on (set by background.js). Falls back to the
+// active tab of the focused window.
+async function resolveBoundTab() {
+  try {
+    const { boundTabId, boundWindowId } = await chrome.storage.session.get([
+      "boundTabId",
+      "boundWindowId",
+    ]);
+    if (boundTabId != null) {
+      assistant.tabId = boundTabId;
+      assistant.windowId = boundWindowId ?? null;
+    } else {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      assistant.tabId = tab?.id ?? null;
+      assistant.windowId = tab?.windowId ?? null;
+    }
+    log("bound tab", assistant.tabId, "window", assistant.windowId);
+  } catch (err) {
+    log("resolveBoundTab failed:", err?.message || err);
+  }
 }
 
 // ---- Assistant tab group ----
@@ -75,11 +117,11 @@ async function init() {
 async function ensureAssistantGroup() {
   if (!chrome.tabGroups || !chrome.tabs?.group) return; // API unavailable
   try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const tab = assistant.tabId != null ? await chrome.tabs.get(assistant.tabId) : null;
     if (!tab?.id) return;
     assistant.windowId = tab.windowId;
 
-    // Valid existing group? keep it. Otherwise create one from the current tab.
+    // Valid existing group? keep it. Otherwise create one from the bound tab.
     if (await groupIsValid(assistant.groupId)) {
       // already bound
     } else if (tab.groupId != null && tab.groupId >= 0) {
@@ -151,7 +193,9 @@ function wireEvents() {
   els.attachBtn.addEventListener("click", () => els.fileInput.click());
   els.fileInput.addEventListener("change", (e) => addImageFiles(e.target.files));
 
-  els.contextBtn.addEventListener("click", togglePageContext);
+  els.contextBtn.addEventListener("click", toggleAutoContext);
+  els.eyesBtn.addEventListener("click", toggleEyes);
+  window.addEventListener("pagehide", () => { if (eyesOn) Eyes.detach(); });
   els.clearBtn.addEventListener("click", clearChat);
   els.settingsBtn.addEventListener("click", () => showSettings(els.settingsView.classList.contains("hidden")));
   els.saveSettingsBtn.addEventListener("click", saveSettings);
@@ -219,32 +263,61 @@ function renderAttachments() {
 }
 
 // ---- Page context ----
-async function togglePageContext() {
-  if (pageContext) { pageContext = null; updateContextBadge(); return; }
+// The 📄 button toggles whether the bound tab's content is attached to requests.
+function toggleAutoContext() {
+  autoContext = !autoContext;
+  if (!autoContext) pageContext = null;
+  updateContextBadge();
+  log("autoContext:", autoContext);
+}
+
+function updateContextBadge() {
+  els.contextBadge.classList.toggle("hidden", !autoContext);
+  els.contextBtn.classList.toggle("active", autoContext);
+}
+
+// Toggle full eyes: attach/detach the debugger on the bound tab.
+async function toggleEyes() {
+  if (assistant.tabId == null) {
+    appendMessage("Немає прив'язаної вкладки для очей.", "error");
+    return;
+  }
   try {
-    // Read the active tab of the assistant's bound window (fallback: current).
-    const q = assistant.windowId != null
-      ? { active: true, windowId: assistant.windowId }
-      : { active: true, currentWindow: true };
-    const [tab] = await chrome.tabs.query(q);
-    if (!tab?.id) throw new Error("Немає активної вкладки");
+    if (eyesOn) {
+      await Eyes.detach();
+      eyesOn = false;
+      log("eyes off");
+    } else {
+      await Eyes.attach(assistant.tabId);
+      eyesOn = true;
+      log("eyes on → tab", assistant.tabId);
+    }
+  } catch (err) {
+    eyesOn = Eyes.isAttached(assistant.tabId);
+    appendMessage("Не вдалося увімкнути очі: " + (err?.message || err), "error");
+    log("toggleEyes failed:", err?.message || err);
+  }
+  els.eyesBtn.classList.toggle("active", eyesOn);
+}
+
+// Read the bound tab's URL, title and visible text. Scoped to the pinned tab,
+// so switching tabs does not change what the assistant sees.
+async function readPinnedTab() {
+  if (assistant.tabId == null) return null;
+  try {
     const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: assistant.tabId },
       func: () => ({
         url: location.href,
         title: document.title,
         text: (document.body?.innerText || "").slice(0, 20000),
       }),
     });
-    pageContext = res.result;
-    updateContextBadge();
+    return res?.result || null;
   } catch (err) {
-    appendMessage("Не вдалося прочитати сторінку: " + err.message, "error");
+    log("readPinnedTab failed:", err?.message || err);
+    return null;
   }
-}
-
-function updateContextBadge() {
-  els.contextBadge.classList.toggle("hidden", !pageContext);
 }
 
 // ---- Chat ----
@@ -264,17 +337,43 @@ async function onSend() {
 
   if (!settings.apiKey) { showSettings(true); return; }
 
+  // Auto-attach a fresh snapshot of the bound tab so the model sees the page.
+  if (autoContext) {
+    pageContext = await readPinnedTab();
+    log("page context:", pageContext ? pageContext.url : "none");
+  }
+
+  // Eyes: screenshot (visual) + console/network (debugger).
+  let eyesShot = null;
+  let debugBlock = "";
+  if (eyesOn) {
+    const tab = await chrome.tabs.get(assistant.tabId).catch(() => null);
+    if (tab?.active) eyesShot = await Eyes.screenshot(tab.windowId);
+    debugBlock = Eyes.debugText();
+    log("eyes: screenshot", !!eyesShot, "debug chars", debugBlock.length);
+  }
+
   // Build parts for the API
   const parts = [];
   for (const img of pendingImages) {
     parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
   }
-  let promptText = text;
+  if (eyesShot) parts.push({ inlineData: eyesShot });
+
+  // Compose the context-augmented prompt.
+  const ctx = [];
   if (pageContext) {
-    promptText =
+    ctx.push(
       `Контекст активної сторінки:\nURL: ${pageContext.url}\nЗаголовок: ${pageContext.title}\n` +
-      `Текст:\n"""${pageContext.text}"""\n\n---\nЗапит користувача: ${text}`;
+        `Текст:\n"""${pageContext.text}"""`
+    );
   }
+  if (eyesShot) ctx.push("До запиту додано скриншот поточної вкладки.");
+  if (debugBlock) ctx.push("Дані DevTools цієї вкладки:\n" + debugBlock);
+
+  const promptText = ctx.length
+    ? ctx.join("\n\n") + `\n\n---\nЗапит користувача: ${text}`
+    : text;
   if (promptText) parts.push({ text: promptText });
 
   // Render user bubble (show the typed text + thumbnails, not the injected context)
@@ -301,12 +400,12 @@ async function runTurn(parts) {
 
   try {
     const reply = await callGemini();
-    typingEl.remove();
+    removeTyping(typingEl);
     history.push({ role: "model", parts: [{ text: reply }] });
     appendMessage(reply, "gemini");
     setGroupState("done");
   } catch (err) {
-    typingEl.remove();
+    removeTyping(typingEl);
     // Roll back the failed user turn so retry/history stays clean
     history.pop();
     appendErrorMessage(err, parts);
@@ -319,14 +418,43 @@ async function runTurn(parts) {
 
 async function callGemini() {
   const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": settings.apiKey,
-    },
-    body: JSON.stringify({ contents: history }),
-  });
+
+  // Abort if the model takes too long, so the UI never hangs indefinitely.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const t0 = Date.now();
+  log("request →", settings.model, `(${history.length} turns)`);
+
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": settings.apiKey,
+      },
+      body: JSON.stringify({ contents: history }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      log("request aborted after", REQUEST_TIMEOUT_MS, "ms");
+      const e = new Error(
+        `Перевищено час очікування (${REQUEST_TIMEOUT_MS / 1000} с). ` +
+          "Модель довго відповідає — спробуйте ще раз або оберіть іншу модель."
+      );
+      e.retryable = true;
+      throw e;
+    }
+    log("network error:", err?.message || err);
+    const e = new Error("Помилка мережі: " + (err?.message || err));
+    e.retryable = true;
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  log("response", resp.status, `in ${Date.now() - t0}ms`);
 
   if (!resp.ok) {
     let detail = `HTTP ${resp.status}`;
@@ -455,10 +583,21 @@ function retryTurn(errDiv, parts) {
 function appendTyping() {
   const div = document.createElement("div");
   div.className = "msg gemini typing";
-  div.textContent = "друкую…";
+  const t0 = Date.now();
+  const tick = () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    div.textContent = s < 1 ? "друкую…" : `друкую… ${s}с`;
+  };
+  tick();
+  div._timer = setInterval(tick, 1000);
   els.chatLog.appendChild(div);
   scrollDown();
   return div;
+}
+
+function removeTyping(div) {
+  if (div?._timer) clearInterval(div._timer);
+  div?.remove();
 }
 
 function setBusy(b) {

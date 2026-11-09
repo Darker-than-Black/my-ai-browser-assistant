@@ -9,7 +9,8 @@
     "scripting",
     "storage",
     "tabs",
-    "tabGroups"
+    "tabGroups",
+    "debugger"
   ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*"
