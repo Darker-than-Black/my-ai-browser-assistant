@@ -428,12 +428,18 @@ async function runTurn(parts) {
     setGroupState("done");
   } catch (err) {
     removeTyping(typingEl);
-    history.length = baseLen; // drop the user turn and any tool turns added
-    if (err.stopped) {
+    if (err.keepHistory) {
+      // Step limit: keep tool context so "Продовжити" resumes; no retry button.
+      appendErrorMessage(err, null);
       setGroupState("idle");
     } else {
-      appendErrorMessage(err, parts);
-      setGroupState("error");
+      history.length = baseLen; // drop the user turn and any tool turns added
+      if (err.stopped) {
+        setGroupState("idle");
+      } else {
+        appendErrorMessage(err, parts);
+        setGroupState("error");
+      }
     }
   } finally {
     stopRequested = false;
@@ -445,7 +451,7 @@ async function runTurn(parts) {
 // Agentic browsing: the model calls browser tools (read_page/navigate/click)
 // on the bound tab in a loop until it produces a final answer. A request is
 // aborted only on a stall (no response for REQUEST_IDLE_MS) or a user Stop.
-const MAX_TOOL_STEPS = 8;
+const MAX_TOOL_STEPS = 12;
 
 const SYSTEM_PROMPT =
   "Ти — браузерний АГЕНТ у бічній панелі Chrome з прямим доступом до прив'язаної " +
@@ -564,9 +570,10 @@ async function callGemini(onStep) {
   }
 
   const e = new Error(
-    `Досягнуто ліміт кроків (${MAX_TOOL_STEPS}). Уточни запит або спробуй ще раз.`
+    `Досягнуто ліміт кроків (${MAX_TOOL_STEPS}). Натисни «Продовжити», ` +
+      "щоб агент продовжив з того місця."
   );
-  e.retryable = true;
+  e.keepHistory = true; // keep tool context so Continue resumes it
   throw e;
 }
 
