@@ -487,60 +487,96 @@ function makeAbortError() {
   return e;
 }
 
-// One non-streaming generateContent call with tools; returns the candidate.
-async function geminiOnce() {
-  const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
-  const controller = new AbortController();
-  currentController = controller;
-  const idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
-  const t0 = Date.now();
+const MAX_RETRIES = 4; // auto-retries on 429/503 (rate limit / overload)
 
-  let resp;
-  try {
-    resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey },
-      body: JSON.stringify({
-        contents: history,
-        tools: [{ function_declarations: Tools.declarations }],
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      }),
-      signal: controller.signal,
+// Extract Gemini's suggested retry delay (RetryInfo) from an error body, ms.
+function retryDelayMs(body) {
+  const err = Array.isArray(body) ? body[0]?.error : body?.error;
+  const info = (err?.details || []).find((d) => /RetryInfo/.test(d["@type"] || ""));
+  const m = /^(\d+)(?:\.\d+)?s$/.exec(info?.retryDelay || "");
+  return m ? Number(m[1]) * 1000 + 500 : null;
+}
+
+function errMessage(body, fallback) {
+  const err = Array.isArray(body) ? body[0]?.error : body?.error;
+  return err?.message || fallback;
+}
+
+// Sleep that a user Stop can interrupt.
+function abortableSleep(ms) {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    currentController = controller;
+    const t = setTimeout(() => { currentController = null; resolve(); }, ms);
+    controller.signal.addEventListener("abort", () => {
+      clearTimeout(t);
+      currentController = null;
+      reject(makeAbortError());
     });
-  } catch (err) {
-    clearTimeout(idle);
-    currentController = null;
-    if (err.name === "AbortError") throw makeAbortError();
-    const e = new Error("Помилка мережі: " + (err?.message || err));
-    e.retryable = true;
-    throw e;
-  } finally {
-    clearTimeout(idle);
-    currentController = null;
-  }
+  });
+}
 
-  log("response", resp.status, `in ${Date.now() - t0}ms`);
+// One generateContent call with tools, auto-retrying on 429/503. onInfo(label)
+// logs waits. Returns the candidate.
+async function geminiOnce(onInfo) {
+  const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
 
-  if (!resp.ok) {
-    let detail = `HTTP ${resp.status}`;
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    currentController = controller;
+    const idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
+    const t0 = Date.now();
+
+    let resp;
     try {
-      const e = await resp.json();
-      detail = (Array.isArray(e) ? e[0]?.error?.message : e.error?.message) || detail;
-    } catch (_) {}
-    throw buildApiError(resp.status, detail);
-  }
-
-  const data = await resp.json();
-  const cand = data.candidates?.[0];
-  if (!cand) {
-    if (data.promptFeedback?.blockReason) {
-      throw new Error("Запит заблоковано: " + data.promptFeedback.blockReason);
+      resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey },
+        body: JSON.stringify({
+          contents: history,
+          tools: [{ function_declarations: Tools.declarations }],
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(idle);
+      currentController = null;
+      if (err.name === "AbortError") throw makeAbortError();
+      const e = new Error("Помилка мережі: " + (err?.message || err));
+      e.retryable = true;
+      throw e;
     }
-    const e = new Error("Порожня відповідь моделі.");
-    e.retryable = true;
-    throw e;
+    clearTimeout(idle);
+    currentController = null;
+    log("response", resp.status, `in ${Date.now() - t0}ms`);
+
+    if (resp.ok) {
+      const data = await resp.json();
+      const cand = data.candidates?.[0];
+      if (!cand) {
+        if (data.promptFeedback?.blockReason) {
+          throw new Error("Запит заблоковано: " + data.promptFeedback.blockReason);
+        }
+        const e = new Error("Порожня відповідь моделі.");
+        e.retryable = true;
+        throw e;
+      }
+      return cand;
+    }
+
+    // Error: parse body and maybe retry on rate limit / overload.
+    let body = null;
+    try { body = await resp.json(); } catch (_) {}
+    if ((resp.status === 429 || resp.status === 503) && attempt < MAX_RETRIES) {
+      const wait = Math.min(retryDelayMs(body) ?? 2000 * 2 ** attempt, 60000);
+      log("rate-limited, retry in", wait, "ms");
+      onInfo && onInfo(`⏳ ліміт запитів, чекаю ${Math.round(wait / 1000)} с…`);
+      await abortableSleep(wait);
+      continue;
+    }
+    throw buildApiError(resp.status, errMessage(body, `HTTP ${resp.status}`));
   }
-  return cand;
 }
 
 // Agentic loop: let the model call browser tools until it returns a final
@@ -549,7 +585,7 @@ async function callGemini(onStep) {
   const seen = new Map(); // tool-call signature -> count, to break loops
 
   for (let i = 0; i < MAX_TOOL_STEPS; i++) {
-    const cand = await geminiOnce();
+    const cand = await geminiOnce(onStep);
     const parts = cand.content?.parts || [];
     const calls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
 
