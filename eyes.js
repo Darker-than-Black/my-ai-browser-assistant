@@ -86,7 +86,13 @@ const Eyes = (() => {
       }
       case "Network.requestWillBeSent": {
         const r = params.request || {};
-        netInflight.set(params.requestId, { method: r.method, url: r.url, status: null });
+        netInflight.set(params.requestId, {
+          method: r.method,
+          url: r.url,
+          type: params.type || "", // Document / XHR / Fetch / Image ...
+          postData: (r.postData || "").slice(0, 400),
+          status: null,
+        });
         break;
       }
       case "Network.responseReceived": {
@@ -174,11 +180,16 @@ const Eyes = (() => {
       lines.push("=== Консоль (останні) ===");
       for (const c of consoleLog) lines.push(`[${c.level}] ${trunc(c.text, 300)}`);
     }
-    if (netLog.length) {
-      lines.push("=== Мережа (останні) ===");
-      for (const n of netLog) {
+    // Prefer API traffic (XHR/Fetch/Document) — it reveals the real filter
+    // parameters the frontend sends; skip static assets to save tokens.
+    const api = netLog.filter((n) => /xhr|fetch|document/i.test(n.type || "") || !n.type);
+    if (api.length) {
+      lines.push("=== Network XHR/Fetch (recent — real request params) ===");
+      for (const n of api) {
         const st = n.failed ? `FAILED ${n.errorText || ""}` : n.status ?? "?";
-        lines.push(`${n.method} ${trunc(n.url, 160)} → ${st}`);
+        let line = `${n.method} ${trunc(n.url, 300)} → ${st}`;
+        if (n.postData) line += `\n  body: ${trunc(n.postData, 300)}`;
+        lines.push(line);
       }
     }
     return lines.join("\n");

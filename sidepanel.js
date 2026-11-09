@@ -482,6 +482,7 @@ const SYSTEM_PROMPT = `You are an autonomous browser agent embedded in a Chrome 
 ## How to work
 1. Act yourself with tools. Never tell the user to perform the steps manually.
 2. Target sites are usually SPAs: filter options are often NOT in the page text or URL. Do not guess query-string parameters. Drive the UI — click the filter (e.g. "Region"), then look() to see the options, then click the exact option by its visible text.
+2a. NEVER guess internal codes (region/category/status ids) from conventional numbering — they are site-specific (e.g. a region may be a code range like 79-82, not "13"). Learn the real values instead, by either: (a) reading the app's own data via run_js — the client state or config, e.g. run_js("JSON.stringify(window.__NUXT__||window.__INITIAL_STATE__||'').slice(0,2000)") or querying the framework store; or (b) applying the filter through the UI (click/run_js) and then read_console to see the ACTUAL API request the frontend sent (its URL/body contain the exact parameters). Trust the observed request, not assumptions.
 3. When click/type by visible text fail (custom chips, dropdowns, shadow DOM), use run_js to act on the DOM directly. Examples:
    - open a filter: run_js("[...document.querySelectorAll('button,[role=button]')].find(e=>e.textContent.trim()=='Статус')?.click()")
    - list the options that appeared: run_js("[...document.querySelectorAll('li,label,.option')].map(e=>e.textContent.trim()).filter(Boolean)")
