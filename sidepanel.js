@@ -316,11 +316,79 @@ function wireEvents() {
   els.macroPlay.addEventListener("click", playSelectedMacro);
   els.sessionSelect.addEventListener("change", (e) => switchSession(e.target.value));
   els.newSessionBtn.addEventListener("click", () => newSession(true));
+  setupTooltips();
   window.addEventListener("pagehide", () => { if (eyesOn) Eyes.detach(); });
   els.clearBtn.addEventListener("click", clearChat);
   els.settingsBtn.addEventListener("click", () => showSettings(els.settingsView.classList.contains("hidden")));
   els.saveSettingsBtn.addEventListener("click", saveSettings);
   els.modelQuick.addEventListener("change", onQuickModelChange);
+}
+
+// ---- Tooltips ----
+// Rich hover/focus popups: each control carries data-tip (title) and either
+// data-desc (static) or data-on/data-off (how the assistant behaves in each
+// state of a toggle; the current state is read live from the .active class).
+function setupTooltips() {
+  const tip = document.getElementById("tooltip");
+  if (!tip) return;
+  let current = null;
+
+  const addLine = (cls, text) => {
+    const d = document.createElement("div");
+    d.className = cls;
+    d.textContent = text;
+    tip.appendChild(d);
+  };
+
+  const position = (el) => {
+    const r = el.getBoundingClientRect();
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const left = Math.min(Math.max(8, r.left), Math.max(8, vw - tw - 8));
+    let top = r.bottom + 6;
+    if (top + th > vh - 4) top = r.top - th - 6; // flip above if no room below
+    if (top < 4) top = 4;
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  };
+
+  const show = (el) => {
+    current = el;
+    tip.innerHTML = "";
+    addLine("tip-title", el.dataset.tip || "");
+    const on = el.dataset.on;
+    const off = el.dataset.off;
+    if (on || off) {
+      const active = el.classList.contains("active");
+      addLine("tip-state", active ? "● Зараз: увімкнено" : "○ Зараз: вимкнено");
+      if (on) addLine("tip-line" + (active ? " cur" : ""), on);
+      if (off) addLine("tip-line" + (active ? "" : " cur"), off);
+    } else if (el.dataset.desc) {
+      addLine("tip-line", el.dataset.desc);
+    }
+    tip.classList.remove("hidden");
+    position(el);
+  };
+
+  const hide = () => { current = null; tip.classList.add("hidden"); };
+
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (el && el !== current) show(el);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (el && !el.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener("focusin", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (el) show(el);
+  });
+  document.addEventListener("focusout", hide);
+  document.addEventListener("click", hide, true);
+  if (els.chatLog) els.chatLog.addEventListener("scroll", hide);
 }
 
 // ---- Theme ----

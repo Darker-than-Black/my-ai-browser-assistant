@@ -10,12 +10,27 @@
   <header>
     <h2>Gemini Assistant</h2>
     <div class="header-actions">
-      <button id="context-btn" class="icon-btn active" title="Автоконтекст: читати текст сторінки">📄</button>
-      <button id="eyes-btn" class="icon-btn" title="Очі: консоль + мережа + скриншот (увага: вмикає налагодження, жовтий банер на вкладці)">👁️</button>
-      <button id="confirm-btn" class="icon-btn" title="Підтверджувати дії агента (клік/ввід/перехід) перед виконанням">✋</button>
-      <button id="theme-btn" class="icon-btn" title="Тема: авто / темна / світла">🌓</button>
-      <button id="clear-btn" class="icon-btn" title="Очистити чат">🗑️</button>
-      <button id="settings-btn" class="icon-btn" title="Налаштування">⚙️</button>
+      <button id="context-btn" class="icon-btn active"
+        data-tip="Автоконтекст сторінки"
+        data-on="УВІМК: перед кожним запитом асистент читає текст поточної вкладки й додає його до промпту — відповідає з урахуванням сторінки."
+        data-off="ВИМК: сторінка не читається; асистент відповідає лише на твій текст.">📄</button>
+      <button id="eyes-btn" class="icon-btn"
+        data-tip="Очі (налагодження вкладки)"
+        data-on="УВІМК: асистент бачить скриншот, консоль і мережу вкладки; доступні run_js/dom_map над DOM. Chrome показує жовтий банер налагодження."
+        data-off="ВИМК: лише текст сторінки; run_js недоступний.">👁️</button>
+      <button id="confirm-btn" class="icon-btn"
+        data-tip="Підтвердження дій"
+        data-on="УВІМК: перед кожною дією, що змінює сторінку (клік / ввід / перехід / JS), асистент питає дозвіл. Безпечно на реальних формах."
+        data-off="ВИМК: асистент виконує дії одразу, без запитань — швидше, але ризикованіше.">✋</button>
+      <button id="theme-btn" class="icon-btn"
+        data-tip="Тема оформлення"
+        data-desc="Перемикає по колу: авто (за системою) → темна → світла. Поточний режим показує іконка.">🌓</button>
+      <button id="clear-btn" class="icon-btn"
+        data-tip="Очистити чат"
+        data-desc="Стирає повідомлення поточного чату. Сама сесія лишається у списку.">🗑️</button>
+      <button id="settings-btn" class="icon-btn"
+        data-tip="Налаштування"
+        data-desc="API-ключ і вибір моделі.">⚙️</button>
     </div>
   </header>
 
@@ -37,8 +52,12 @@
   <!-- Chat view -->
   <section id="chat-view">
     <div class="session-bar">
-      <select id="session-select" title="Збережені чати"></select>
-      <button id="new-session-btn" class="icon-btn" title="Новий чат">＋</button>
+      <select id="session-select"
+        data-tip="Чати"
+        data-desc="Перемикання між збереженими розмовами. Кожна зберігається окремо й відновлюється після перезапуску."></select>
+      <button id="new-session-btn" class="icon-btn"
+        data-tip="Новий чат"
+        data-desc="Створити порожній чат. Поточний зберігається у списку.">＋</button>
     </div>
     <div id="chat-log">
       <div class="msg gemini">Вітаю! Чим можу допомогти на цій сторінці?</div>
@@ -51,17 +70,32 @@
         <textarea id="user-input" rows="2" placeholder="Введіть запит або опишіть задачу... (Enter — надіслати, Shift+Enter — новий рядок)"></textarea>
       </div>
       <div class="input-controls">
-        <button id="attach-btn" class="icon-btn" title="Додати зображення">🖼️</button>
+        <button id="attach-btn" class="icon-btn"
+          data-tip="Додати зображення"
+          data-desc="Прикріпити картинки до запиту. Також працює вставка Ctrl+V.">🖼️</button>
         <input id="file-input" type="file" accept="image/*" multiple hidden />
-        <button id="record-btn" class="icon-btn" title="Записати макрос (послідовність дій агента)">🎬</button>
-        <select id="macro-select" class="model-quick" title="Макроси"></select>
-        <button id="macro-play" class="icon-btn" title="Відтворити вибраний макрос">▶</button>
+        <button id="record-btn" class="icon-btn"
+          data-tip="Запис макросу"
+          data-on="ЗАПИС іде: усі дії агента фіксуються. Натисни ще раз — задати назву й зберегти."
+          data-off="ВИМК: натисни, щоб почати запис послідовності дій для повторного відтворення.">🎬</button>
+        <select id="macro-select" class="model-quick"
+          data-tip="Збережені макроси"
+          data-desc="Вибери записану послідовність дій, щоб потім відтворити її кнопкою ▶."></select>
+        <button id="macro-play" class="icon-btn"
+          data-tip="Відтворити макрос"
+          data-desc="Виконує вибраний макрос крок за кроком — без участі моделі (тільки записані дії).">▶</button>
         <span id="context-badge" class="badge hidden">+ сторінка</span>
-        <select id="model-quick" class="model-quick" title="Модель"></select>
-        <button id="send-btn" class="primary">Надіслати</button>
+        <select id="model-quick" class="model-quick"
+          data-tip="Модель"
+          data-desc="Поточна модель. Легші (Flash-Lite) — вищі безкоштовні ліміти й швидше; флагман — розумніший, але ліміти жорсткіші."></select>
+        <button id="send-btn" class="primary"
+          data-tip="Надіслати / Стоп / Продовжити"
+          data-desc="Надсилає запит. Під час відповіді кнопка стає «Стоп». З порожнім полем — «Продовжити» з місця зупинки.">Надіслати</button>
       </div>
     </div>
   </section>
+
+  <div id="tooltip" class="hidden" role="tooltip"></div>
 
   <script src="markdown.js"></script>
   <script src="eyes.js"></script>

@@ -318,3 +318,23 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 #settings-view button.primary { margin-left: 0; }
 .status { font-size: 12px; color: var(--text-muted); min-height: 16px; }
+
+/* Rich tooltips */
+#tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(260px, calc(100vw - 16px));
+  background: var(--panel-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.4;
+}
+#tooltip .tip-title { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+#tooltip .tip-state { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+#tooltip .tip-line { color: var(--text-muted); margin-top: 3px; }
+#tooltip .tip-line.cur { color: var(--text-main); }
+#tooltip .tip-line.cur::before { content: "➤ "; color: var(--accent); }
