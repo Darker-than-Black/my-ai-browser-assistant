@@ -336,6 +336,7 @@ function clearChat() {
   updateContextBadge();
   renderAttachments();
   els.chatLog.innerHTML = '<div class="msg gemini">Чат очищено. Чим можу допомогти?</div>';
+  updateSendButton();
 }
 
 async function onSend() {
@@ -406,10 +407,12 @@ async function runTurn(parts) {
   setGroupState("busy");
   const typingEl = appendTyping();
   let bubble = null;
+  let lastFull = "";
 
   // Render streamed text into a single gemini bubble, replacing the typing dots
   // on the first chunk.
   const onDelta = (full) => {
+    lastFull = full;
     if (!bubble) {
       removeTyping(typingEl);
       bubble = appendMessage("", "gemini");
@@ -426,12 +429,23 @@ async function runTurn(parts) {
     setGroupState("done");
   } catch (err) {
     removeTyping(typingEl);
-    if (bubble) bubble.remove();
-    // Roll back the failed user turn so retry/history stays clean
-    history.pop();
-    appendErrorMessage(err, parts);
-    setGroupState("error");
+    if (err.stopped) {
+      // User pressed Stop: keep whatever was generated so they can continue.
+      if (bubble && lastFull.trim()) {
+        history.push({ role: "model", parts: [{ text: lastFull }] });
+      } else {
+        if (bubble) bubble.remove();
+        history.pop(); // nothing generated — drop the user turn
+      }
+      setGroupState("idle");
+    } else {
+      if (bubble) bubble.remove();
+      history.pop(); // keep retry/history clean
+      appendErrorMessage(err, parts);
+      setGroupState("error");
+    }
   } finally {
+    stopRequested = false;
     setBusy(false);
     els.input.focus();
   }
@@ -445,6 +459,7 @@ async function callGemini(onDelta) {
     `${API_BASE}/${encodeURIComponent(settings.model)}:streamGenerateContent?alt=sse`;
 
   const controller = new AbortController();
+  currentController = controller;
   let idle;
   const resetIdle = () => {
     clearTimeout(idle);
@@ -454,7 +469,13 @@ async function callGemini(onDelta) {
   resetIdle();
   log("stream →", settings.model, `(${history.length} turns)`);
 
-  const timeoutError = () => {
+  // An abort is either a user Stop or an idle stall — map to the right error.
+  const abortError = () => {
+    if (stopRequested) {
+      const e = new Error("Зупинено користувачем.");
+      e.stopped = true;
+      return e;
+    }
     const e = new Error(
       `Немає відповіді ${REQUEST_IDLE_MS / 1000} с. Модель перевантажена або ` +
         "недоступна — спробуйте ще раз або оберіть іншу модель."
@@ -476,7 +497,8 @@ async function callGemini(onDelta) {
     });
   } catch (err) {
     clearTimeout(idle);
-    if (err.name === "AbortError") { log("connect stalled"); throw timeoutError(); }
+    currentController = null;
+    if (err.name === "AbortError") { log("connect aborted"); throw abortError(); }
     log("network error:", err?.message || err);
     const e = new Error("Помилка мережі: " + (err?.message || err));
     e.retryable = true;
@@ -487,6 +509,7 @@ async function callGemini(onDelta) {
 
   if (!resp.ok) {
     clearTimeout(idle);
+    currentController = null;
     let detail = `HTTP ${resp.status}`;
     try {
       const e = await resp.json();
@@ -526,10 +549,11 @@ async function callGemini(onDelta) {
       }
     }
   } catch (err) {
-    if (err.name === "AbortError") { log("stream stalled"); throw timeoutError(); }
+    if (err.name === "AbortError") { log("stream aborted"); throw abortError(); }
     throw err;
   } finally {
     clearTimeout(idle);
+    currentController = null;
   }
 
   log("stream done", `${Date.now() - t0}ms`, `${full.length} chars`);
@@ -666,8 +690,51 @@ function removeTyping(div) {
 
 function setBusy(b) {
   busy = b;
-  els.sendBtn.disabled = b;
-  els.sendBtn.textContent = b ? "…" : "Надіслати";
+  updateSendButton();
+}
+
+function hasModelTurn() {
+  return history.some((h) => h.role === "model");
+}
+
+// Button mode: busy → Стоп; empty input → Продовжити; otherwise → Надіслати.
+function updateSendButton() {
+  const btn = els.sendBtn;
+  if (busy) {
+    btn.dataset.mode = "stop";
+    btn.textContent = "Стоп";
+    btn.disabled = false;
+  } else if (els.input.value.trim() === "") {
+    btn.dataset.mode = "continue";
+    btn.textContent = "Продовжити";
+    btn.disabled = !hasModelTurn();
+  } else {
+    btn.dataset.mode = "send";
+    btn.textContent = "Надіслати";
+    btn.disabled = false;
+  }
+}
+
+function onSendClick() {
+  switch (els.sendBtn.dataset.mode) {
+    case "stop": return stopGeneration();
+    case "continue": return onContinue();
+    default: return onSend();
+  }
+}
+
+function stopGeneration() {
+  if (!busy || !currentController) return;
+  stopRequested = true;
+  currentController.abort();
+  log("stop requested");
+}
+
+// Continue the last answer where it left off (e.g. after Stop).
+async function onContinue() {
+  if (busy || !hasModelTurn()) return;
+  log("continue");
+  await runTurn([{ text: "Продовжуй відповідь з місця, де зупинився." }]);
 }
 
 function scrollDown() {
