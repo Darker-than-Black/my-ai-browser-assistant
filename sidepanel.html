@@ -25,11 +25,7 @@
     </label>
     <label class="field">
       <span>Модель</span>
-      <select id="model-select">
-        <option value="gemini-3.8-flash">gemini-3.8-flash</option>
-        <option value="gemini-3.8-pro">gemini-3.8-pro</option>
-        <option value="gemini-2.5-flash">gemini-2.5-flash (застар.)</option>
-      </select>
+      <select id="model-select"></select>
     </label>
     <button id="save-settings-btn" class="primary">Зберегти</button>
     <p id="settings-status" class="status"></p>
@@ -51,6 +47,7 @@
         <button id="attach-btn" class="icon-btn" title="Додати зображення">🖼️</button>
         <input id="file-input" type="file" accept="image/*" multiple hidden />
         <span id="context-badge" class="badge hidden">+ сторінка</span>
+        <select id="model-quick" class="model-quick" title="Модель"></select>
         <button id="send-btn" class="primary">Надіслати</button>
       </div>
     </div>

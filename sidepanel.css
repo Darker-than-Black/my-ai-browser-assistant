@@ -127,6 +127,31 @@ textarea:focus { outline: none; border-color: var(--accent); }
 .input-controls { display: flex; align-items: center; gap: 8px; }
 .badge { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 10px; padding: 1px 8px; }
 
+.model-quick {
+  font-size: 11px;
+  max-width: 130px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.model-quick:focus { outline: none; border-color: var(--accent); }
+
+/* Error actions (retry / switch model) */
+.msg.error .err-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.msg.error .err-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #fca5a5;
+  background: transparent;
+  color: #fecaca;
+  cursor: pointer;
+}
+.msg.error .err-btn:hover { background: #991b1b; }
+
 button.primary {
   margin-left: auto;
   padding: 7px 14px;
