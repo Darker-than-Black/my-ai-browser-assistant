@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Side Assistant",
+  "version": "0.1.0",
+  "description": "Контекстний помічник Gemini у бічній панелі браузера",
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Відкрити Gemini Panel"
+  }
+}

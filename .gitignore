@@ -1,0 +1,20 @@
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+tmp/
+dist/
+
+# Dependencies (на майбутнє, якщо з'являться)
+node_modules/
+
+# Секрети — ключі ніколи не комітимо
+.env
+*.key
+secrets.*
