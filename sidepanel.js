@@ -59,7 +59,9 @@ let autoContext = true;
 // a screenshot with each request. Off by default (debugger shows a banner).
 let eyesOn = false;
 
-const REQUEST_TIMEOUT_MS = 90000;
+// Abort only if the stream stalls (no bytes) for this long — not a total-time
+// cap, so slow-but-progressing answers are never cut off.
+const REQUEST_IDLE_MS = 45000;
 
 // Lightweight logger: timestamped lines in the devtools console of the panel
 // (right-click panel → Inspect) so a slow/stuck request is diagnosable.
@@ -397,15 +399,28 @@ async function runTurn(parts) {
   setBusy(true);
   setGroupState("busy");
   const typingEl = appendTyping();
+  let bubble = null;
+
+  // Render streamed text into a single gemini bubble, replacing the typing dots
+  // on the first chunk.
+  const onDelta = (full) => {
+    if (!bubble) {
+      removeTyping(typingEl);
+      bubble = appendMessage("", "gemini");
+    }
+    bubble.innerHTML = renderMarkdown(full);
+    scrollDown();
+  };
 
   try {
-    const reply = await callGemini();
-    removeTyping(typingEl);
+    const reply = await callGemini(onDelta);
+    if (!bubble) { removeTyping(typingEl); bubble = appendMessage(reply, "gemini"); }
+    else bubble.innerHTML = renderMarkdown(reply);
     history.push({ role: "model", parts: [{ text: reply }] });
-    appendMessage(reply, "gemini");
     setGroupState("done");
   } catch (err) {
     removeTyping(typingEl);
+    if (bubble) bubble.remove();
     // Roll back the failed user turn so retry/history stays clean
     history.pop();
     appendErrorMessage(err, parts);
@@ -416,14 +431,31 @@ async function runTurn(parts) {
   }
 }
 
-async function callGemini() {
-  const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
+// Stream the model response (SSE). Calls onDelta(fullTextSoFar) as chunks
+// arrive and returns the final text. Aborts only on a stall (no bytes for
+// REQUEST_IDLE_MS), so a slow-but-progressing answer is never cut off.
+async function callGemini(onDelta) {
+  const url =
+    `${API_BASE}/${encodeURIComponent(settings.model)}:streamGenerateContent?alt=sse`;
 
-  // Abort if the model takes too long, so the UI never hangs indefinitely.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let idle;
+  const resetIdle = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
+  };
   const t0 = Date.now();
-  log("request →", settings.model, `(${history.length} turns)`);
+  resetIdle();
+  log("stream →", settings.model, `(${history.length} turns)`);
+
+  const timeoutError = () => {
+    const e = new Error(
+      `Немає відповіді ${REQUEST_IDLE_MS / 1000} с. Модель перевантажена або ` +
+        "недоступна — спробуйте ще раз або оберіть іншу модель."
+    );
+    e.retryable = true;
+    return e;
+  };
 
   let resp;
   try {
@@ -437,47 +469,73 @@ async function callGemini() {
       signal: controller.signal,
     });
   } catch (err) {
-    if (err.name === "AbortError") {
-      log("request aborted after", REQUEST_TIMEOUT_MS, "ms");
-      const e = new Error(
-        `Перевищено час очікування (${REQUEST_TIMEOUT_MS / 1000} с). ` +
-          "Модель довго відповідає — спробуйте ще раз або оберіть іншу модель."
-      );
-      e.retryable = true;
-      throw e;
-    }
+    clearTimeout(idle);
+    if (err.name === "AbortError") { log("connect stalled"); throw timeoutError(); }
     log("network error:", err?.message || err);
     const e = new Error("Помилка мережі: " + (err?.message || err));
     e.retryable = true;
     throw e;
-  } finally {
-    clearTimeout(timer);
   }
 
   log("response", resp.status, `in ${Date.now() - t0}ms`);
 
   if (!resp.ok) {
+    clearTimeout(idle);
     let detail = `HTTP ${resp.status}`;
     try {
       const e = await resp.json();
-      detail = e.error?.message || detail;
+      detail = (Array.isArray(e) ? e[0]?.error?.message : e.error?.message) || detail;
     } catch (_) {}
     throw buildApiError(resp.status, detail);
   }
 
-  const data = await resp.json();
-  const cand = data.candidates?.[0];
-  if (!cand) {
-    if (data.promptFeedback?.blockReason) {
-      throw new Error("Запит заблоковано: " + data.promptFeedback.blockReason);
+  // Parse the SSE body: lines of `data: {json}` separated by newlines.
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let full = "";
+  let blocked = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      resetIdle();
+      buf += decoder.decode(value, { stream: true });
+
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let obj;
+        try { obj = JSON.parse(payload); } catch (_) { continue; }
+        if (obj.promptFeedback?.blockReason) blocked = obj.promptFeedback.blockReason;
+        const txt = (obj.candidates?.[0]?.content?.parts || [])
+          .map((p) => p.text || "")
+          .join("");
+        if (txt) { full += txt; onDelta && onDelta(full); }
+      }
     }
-    throw new Error("Порожня відповідь моделі.");
+  } catch (err) {
+    if (err.name === "AbortError") { log("stream stalled"); throw timeoutError(); }
+    throw err;
+  } finally {
+    clearTimeout(idle);
   }
-  const reply = (cand.content?.parts || [])
-    .map((p) => p.text || "")
-    .join("")
-    .trim();
-  return reply || "(модель повернула порожню відповідь)";
+
+  log("stream done", `${Date.now() - t0}ms`, `${full.length} chars`);
+
+  const out = full.trim();
+  if (!out) {
+    if (blocked) throw new Error("Запит заблоковано: " + blocked);
+    const e = new Error("Порожня відповідь моделі.");
+    e.retryable = true;
+    throw e;
+  }
+  return out;
 }
 
 // Classify API failures so the UI can offer the right recovery action.
