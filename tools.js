@@ -57,6 +57,18 @@ const Tools = (() => {
         required: ["text"],
       },
     },
+    {
+      name: "look",
+      description:
+        "Зробити скриншот поточної сторінки і ПОБАЧИТИ її візуально. Використовуй, коли сайт — SPA і потрібних елементів немає в тексті/controls: напр. після click по фільтру, щоб побачити опції у випадаючому списку, і далі клікнути потрібну за текстом.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      name: "read_console",
+      description:
+        "Прочитати консоль і мережеві запити вкладки (помилки JS, виклики API). Працює лише коли увімкнено режим очей (кнопка 👁️).",
+      parameters: { type: "object", properties: {} },
+    },
   ];
 
   // ---- Page snapshot (runs in the page) ----
@@ -228,6 +240,37 @@ const Tools = (() => {
           return { typed: true, field: r.field, page: await snapshot(tabId) };
         }
 
+        case "look": {
+          const tab = await chrome.tabs.get(tabId).catch(() => null);
+          if (!tab) return { error: "Вкладка недоступна" };
+          if (!tab.active) {
+            return { error: "Вкладка не активна — скриншот недоступний. Використай read_page." };
+          }
+          try {
+            const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+              format: "jpeg",
+              quality: 45,
+            });
+            // `image` is lifted out into an inlineData part by the caller.
+            return {
+              ok: true,
+              note: "Скриншот поточної сторінки додано нижче.",
+              image: { mimeType: "image/jpeg", data: String(dataUrl).split(",")[1] },
+            };
+          } catch (e) {
+            return { error: "Скриншот не вдався: " + (e?.message || e) };
+          }
+        }
+
+        case "read_console": {
+          if (typeof Eyes === "undefined" || !Eyes.isAttached(tabId)) {
+            return {
+              error: "Консоль не під'єднана. Користувач має увімкнути кнопку 👁️ у панелі.",
+            };
+          }
+          return { ok: true, data: Eyes.debugText() || "(поки порожньо)" };
+        }
+
         default:
           return { error: "Невідомий інструмент: " + name };
       }
@@ -243,6 +286,8 @@ const Tools = (() => {
       case "navigate": return "переходжу: " + (args?.url || "");
       case "click": return "клік: " + (args?.text || "");
       case "type": return `ввід «${args?.text || ""}»` + (args?.into ? ` → ${args.into}` : "");
+      case "look": return "дивлюсь (скриншот)";
+      case "read_console": return "читаю консоль";
       default: return name;
     }
   }
