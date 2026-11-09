@@ -921,7 +921,7 @@ async function runTurn(parts) {
 // Agentic browsing: the model calls browser tools (read_page/navigate/click)
 // on the bound tab in a loop until it produces a final answer. A request is
 // aborted only on a stall (no response for REQUEST_IDLE_MS) or a user Stop.
-const MAX_TOOL_STEPS = 25;
+const MAX_TOOL_STEPS = 100;
 
 const SYSTEM_PROMPT = `You are an autonomous browser agent embedded in a Chrome side panel. You control one bound browser tab and can perceive and act on it only through the tools below.
 
