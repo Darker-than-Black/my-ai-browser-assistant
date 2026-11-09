@@ -17,15 +17,16 @@ async function disableEverywhere() {
 
 // Open the panel only on the clicked tab, and remember which tab that is so the
 // panel can scope its work to it (via chrome.storage).
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.action.onClicked.addListener((tab) => {
   if (!tab?.id) return;
-  try {
-    await chrome.sidePanel.setOptions({ tabId: tab.id, path: PANEL_PATH, enabled: true });
-    await chrome.storage.session.set({ boundTabId: tab.id, boundWindowId: tab.windowId });
-    await chrome.sidePanel.open({ tabId: tab.id });
-  } catch (error) {
-    console.error("Side Panel open error:", error);
-  }
+  // open() must be called synchronously within the click gesture — no await
+  // before it, or Chrome rejects it ("may only be called in response to a
+  // user gesture"). setOptions and storage can settle in the background.
+  chrome.sidePanel.setOptions({ tabId: tab.id, path: PANEL_PATH, enabled: true });
+  chrome.sidePanel.open({ tabId: tab.id }).catch((error) =>
+    console.error("Side Panel open error:", error)
+  );
+  chrome.storage.session.set({ boundTabId: tab.id, boundWindowId: tab.windowId });
 });
 
 // When the bound tab closes, drop the stored binding.
