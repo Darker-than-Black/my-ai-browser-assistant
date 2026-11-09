@@ -100,6 +100,19 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
 .msg th, .msg td { border: 1px solid var(--border-color); padding: 3px 6px; }
 .typing { color: var(--text-muted); font-style: italic; }
 
+/* Persistent agent tool-step log lines */
+.msg.tool-log {
+  background: transparent;
+  border: 1px dashed var(--border-color);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 3px 8px;
+  align-self: stretch;
+  max-width: 100%;
+  word-break: break-all;
+}
+
 /* Attachments preview */
 #attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .thumb { position: relative; width: 48px; height: 48px; }

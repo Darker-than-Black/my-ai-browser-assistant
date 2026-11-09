@@ -65,7 +65,7 @@ let stopRequested = false;
 
 // Abort only if the stream stalls (no bytes) for this long — not a total-time
 // cap, so slow-but-progressing answers are never cut off.
-const REQUEST_IDLE_MS = 45000;
+const REQUEST_IDLE_MS = 60000;
 
 // Lightweight logger: timestamped lines in the devtools console of the panel
 // (right-click panel → Inspect) so a slow/stuck request is diagnosable.
@@ -409,27 +409,25 @@ async function runTurn(parts) {
   setBusy(true);
   setGroupState("busy");
   const typingEl = appendTyping();
-  let bubble = null;
 
-  // Render status (tool steps) and the final answer into one gemini bubble.
-  const onStatus = (text) => {
-    if (!bubble) {
-      removeTyping(typingEl);
-      bubble = appendMessage("", "gemini");
-    }
-    bubble.innerHTML = renderMarkdown(text);
+  // Each tool step becomes a persistent log line above the live typing dots;
+  // the log stays in the chat after the turn finishes.
+  const onStep = (label) => {
+    const el = document.createElement("div");
+    el.className = "msg tool-log";
+    el.textContent = "🔧 " + label;
+    els.chatLog.insertBefore(el, typingEl);
     scrollDown();
   };
 
   try {
-    const reply = await callGemini(onStatus);
-    if (!bubble) { removeTyping(typingEl); bubble = appendMessage(reply, "gemini"); }
-    else bubble.innerHTML = renderMarkdown(reply);
+    const reply = await callGemini(onStep);
+    removeTyping(typingEl);
+    appendMessage(reply, "gemini");
     history.push({ role: "model", parts: [{ text: reply }] });
     setGroupState("done");
   } catch (err) {
     removeTyping(typingEl);
-    if (bubble) bubble.remove();
     history.length = baseLen; // drop the user turn and any tool turns added
     if (err.stopped) {
       setGroupState("idle");
@@ -450,12 +448,19 @@ async function runTurn(parts) {
 const MAX_TOOL_STEPS = 8;
 
 const SYSTEM_PROMPT =
-  "Ти — браузерний асистент у бічній панелі Chrome. У тебе Є прямий доступ до " +
-  "прив'язаної вкладки через інструменти: read_page (прочитати вміст і посилання), " +
-  "navigate (перейти за URL), click (клікнути елемент за текстом). " +
-  "Коли запит стосується вмісту сайту — ОБОВ'ЯЗКОВО користуйся інструментами, " +
-  "переходь по сторінках і читай їх, перш ніж відповідати. Не кажи, що не маєш " +
-  "доступу до браузера — він у тебе є. Відповідай українською, стисло й по суті.";
+  "Ти — браузерний АГЕНТ у бічній панелі Chrome з прямим доступом до прив'язаної " +
+  "вкладки через інструменти: read_page (вміст + посилання), navigate (перейти за " +
+  "URL), click (клік по елементу за текстом). " +
+  "Правила:\n" +
+  "1. Виконуй задачу САМ через інструменти. НІКОЛИ не відповідай у стилі «зробіть це " +
+  "самостійно» чи «виконайте кроки» — сам натискай фільтри, переходь і читай.\n" +
+  "2. Фільтри на сайтах часто задаються через URL (query-параметри) — за потреби " +
+  "формуй потрібний URL і використовуй navigate.\n" +
+  "3. Продовжуй викликати інструменти, поки не отримаєш ТОЧНУ відповідь (напр. число " +
+  "результатів). Прочитай текст сторінки результатів і назви точну цифру.\n" +
+  "4. Якщо інструмент повернув error — спробуй інший шлях (інший текст для click, " +
+  "прямий navigate), не здавайся після першої невдачі.\n" +
+  "5. Відповідай українською, стисло, лише коли маєш фактичний результат.";
 
 // Map an abort to the right error (user Stop vs idle stall).
 function makeAbortError() {
@@ -529,10 +534,8 @@ async function geminiOnce() {
 }
 
 // Agentic loop: let the model call browser tools until it returns a final
-// answer. onStatus(text) shows progress (tool steps) in the bubble.
-async function callGemini(onStatus) {
-  let steps = "";
-
+// answer. onStep(label) logs each tool step as a persistent line in the chat.
+async function callGemini(onStep) {
   for (let i = 0; i < MAX_TOOL_STEPS; i++) {
     const cand = await geminiOnce();
     const parts = cand.content?.parts || [];
@@ -544,9 +547,7 @@ async function callGemini(onStatus) {
       history.push({ role: "model", parts });
       const responses = [];
       for (const fc of calls) {
-        const lbl = Tools.label(fc.name, fc.args);
-        steps += `🔧 ${lbl}\n`;
-        onStatus && onStatus(steps);
+        onStep && onStep(Tools.label(fc.name, fc.args));
         log("tool", fc.name, fc.args || {});
         const result = await Tools.exec(fc.name, fc.args || {});
         responses.push({ functionResponse: { name: fc.name, response: result } });
