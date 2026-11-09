@@ -94,6 +94,21 @@ async function init() {
   await resolveBoundTab();
   ensureAssistantGroup();
   updateContextBadge();
+  enableEyes(); // debug (console/network/screenshot) on by default
+}
+
+// Attach the debugger eyes to the bound tab (best-effort). Users forget to
+// toggle it, and the agent relies on it, so it's on by default.
+async function enableEyes() {
+  if (assistant.tabId == null || eyesOn) return;
+  try {
+    await Eyes.attach(assistant.tabId);
+    eyesOn = true;
+    log("eyes auto-on → tab", assistant.tabId);
+  } catch (err) {
+    log("auto eyes failed:", err?.message || err);
+  }
+  els.eyesBtn.classList.toggle("active", eyesOn);
 }
 
 // The tab the panel was opened on (set by background.js). Falls back to the
