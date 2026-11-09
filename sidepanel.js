@@ -38,6 +38,18 @@ let pendingImages = []; // [{ mimeType, data(base64), url }]
 let pageContext = null; // { url, title, text } or null
 let busy = false;
 
+// Assistant tab group: scopes the assistant to one browser window and shows
+// request status in the group title. title-only (Chrome tab groups have no
+// icon field), so status is signalled with an emoji prefix.
+const GROUP_NAME = "My assistant";
+const GROUP_STATES = {
+  idle: GROUP_NAME,
+  busy: "⏳ " + GROUP_NAME,
+  done: "✅ " + GROUP_NAME,
+  error: "⚠️ " + GROUP_NAME,
+};
+let assistant = { groupId: null, windowId: null };
+
 // ---- Init ----
 init();
 
@@ -54,6 +66,56 @@ async function init() {
   if (!settings.apiKey) showSettings(true);
 
   wireEvents();
+  ensureAssistantGroup();
+}
+
+// ---- Assistant tab group ----
+// Group the current tab into a "My assistant" group so the assistant is bound
+// to this window. Reuses an existing group if the active tab already has one.
+async function ensureAssistantGroup() {
+  if (!chrome.tabGroups || !chrome.tabs?.group) return; // API unavailable
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.id) return;
+    assistant.windowId = tab.windowId;
+
+    // Valid existing group? keep it. Otherwise create one from the current tab.
+    if (await groupIsValid(assistant.groupId)) {
+      // already bound
+    } else if (tab.groupId != null && tab.groupId >= 0) {
+      assistant.groupId = tab.groupId;
+    } else {
+      assistant.groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+    }
+
+    await chrome.tabGroups.update(assistant.groupId, { title: GROUP_NAME, color: "cyan" });
+  } catch (err) {
+    console.warn("ensureAssistantGroup:", err?.message || err);
+  }
+}
+
+async function groupIsValid(groupId) {
+  if (groupId == null) return false;
+  try {
+    await chrome.tabGroups.get(groupId);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Update the group title to reflect request status (idle/busy/done/error).
+async function setGroupState(state) {
+  const title = GROUP_STATES[state] || GROUP_NAME;
+  try {
+    if (!(await groupIsValid(assistant.groupId))) {
+      await ensureAssistantGroup();
+      if (!(await groupIsValid(assistant.groupId))) return;
+    }
+    await chrome.tabGroups.update(assistant.groupId, { title });
+  } catch (err) {
+    console.warn("setGroupState:", err?.message || err);
+  }
 }
 
 function modelExists(id) {
@@ -160,7 +222,11 @@ function renderAttachments() {
 async function togglePageContext() {
   if (pageContext) { pageContext = null; updateContextBadge(); return; }
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Read the active tab of the assistant's bound window (fallback: current).
+    const q = assistant.windowId != null
+      ? { active: true, windowId: assistant.windowId }
+      : { active: true, currentWindow: true };
+    const [tab] = await chrome.tabs.query(q);
     if (!tab?.id) throw new Error("Немає активної вкладки");
     const [res] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -230,6 +296,7 @@ async function runTurn(parts) {
   history.push({ role: "user", parts });
 
   setBusy(true);
+  setGroupState("busy");
   const typingEl = appendTyping();
 
   try {
@@ -237,11 +304,13 @@ async function runTurn(parts) {
     typingEl.remove();
     history.push({ role: "model", parts: [{ text: reply }] });
     appendMessage(reply, "gemini");
+    setGroupState("done");
   } catch (err) {
     typingEl.remove();
     // Roll back the failed user turn so retry/history stays clean
     history.pop();
     appendErrorMessage(err, parts);
+    setGroupState("error");
   } finally {
     setBusy(false);
     els.input.focus();
