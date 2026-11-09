@@ -8,7 +8,7 @@ const MODELS = [
   { id: "gemini-4-argon", label: "Argon 4 (флагман)" },
   { id: "gemini-3.5-flash-lite", label: "Flash-Lite 3.5 (економна)" },
 ];
-const DEFAULT_MODEL = "gemini-3.8-flash";
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 // ---- DOM ----
 const els = {
