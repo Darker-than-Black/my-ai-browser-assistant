@@ -249,7 +249,7 @@ const Tools = (() => {
           try {
             const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
               format: "jpeg",
-              quality: 45,
+              quality: 30,
             });
             // `image` is lifted out into an inlineData part by the caller.
             return {

@@ -480,7 +480,9 @@ const SYSTEM_PROMPT =
   "2. Сайт — SPA: елементів фільтрів часто НЕ видно в тексті чи URL. НЕ ВГАДУЙ " +
   "query-параметри. Працюй через UI: click по назві фільтра (напр. «Регіон»), потім " +
   "look (скриншот), щоб ПОБАЧИТИ опції у списку, і click по потрібній опції за текстом.\n" +
-  "3. Якщо у фільтрі є пошук — type (ввести назву), потім look або читай підказки, й обери.\n" +
+  "3. Якщо у фільтрі є пошук — type (ввести назву), потім look або читай підказки, й обери. " +
+  "look роби ОЩАДЛИВО — лише коли треба побачити щось, чого нема в read_page (щоб не " +
+  "вичерпати ліміт запитів).\n" +
   "4. Після дії, що змінює вигляд, за потреби роби look, щоб переконатися в результаті. " +
   "URL навмання не формуй — лише якщо впевнений у параметрах.\n" +
   "5. Якщо інструмент повернув error або підхід не спрацював — зміни підхід, НЕ повторюй " +
@@ -533,10 +535,27 @@ function abortableSleep(ms) {
   });
 }
 
+// Keep only the most recent screenshot in history — old images would be
+// re-sent on every call and blow the tokens-per-minute limit (429 storms).
+function pruneHistoryImages() {
+  let lastImageTurn = -1;
+  for (let i = 0; i < history.length; i++) {
+    if ((history[i].parts || []).some((p) => /^image\//.test(p.inlineData?.mimeType || ""))) {
+      lastImageTurn = i;
+    }
+  }
+  for (let i = 0; i < history.length; i++) {
+    if (i === lastImageTurn) continue;
+    const t = history[i];
+    if (t.parts) t.parts = t.parts.filter((p) => !/^image\//.test(p.inlineData?.mimeType || ""));
+  }
+}
+
 // One generateContent call with tools, auto-retrying on 429/503. onInfo(label)
 // logs waits. Returns the candidate.
 async function geminiOnce(onInfo) {
   const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
+  pruneHistoryImages();
 
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
