@@ -116,6 +116,7 @@ async function resolveBoundTab() {
   } catch (err) {
     log("resolveBoundTab failed:", err?.message || err);
   }
+  Tools.bind(() => assistant.tabId);
 }
 
 // ---- Assistant tab group ----
@@ -402,46 +403,37 @@ async function onSend() {
 // `parts` are reused as-is on retry, so nothing re-renders the user bubble.
 async function runTurn(parts) {
   if (busy) return;
+  const baseLen = history.length; // rollback point for the whole turn
   history.push({ role: "user", parts });
 
   setBusy(true);
   setGroupState("busy");
   const typingEl = appendTyping();
   let bubble = null;
-  let lastFull = "";
 
-  // Render streamed text into a single gemini bubble, replacing the typing dots
-  // on the first chunk.
-  const onDelta = (full) => {
-    lastFull = full;
+  // Render status (tool steps) and the final answer into one gemini bubble.
+  const onStatus = (text) => {
     if (!bubble) {
       removeTyping(typingEl);
       bubble = appendMessage("", "gemini");
     }
-    bubble.innerHTML = renderMarkdown(full);
+    bubble.innerHTML = renderMarkdown(text);
     scrollDown();
   };
 
   try {
-    const reply = await callGemini(onDelta);
+    const reply = await callGemini(onStatus);
     if (!bubble) { removeTyping(typingEl); bubble = appendMessage(reply, "gemini"); }
     else bubble.innerHTML = renderMarkdown(reply);
     history.push({ role: "model", parts: [{ text: reply }] });
     setGroupState("done");
   } catch (err) {
     removeTyping(typingEl);
+    if (bubble) bubble.remove();
+    history.length = baseLen; // drop the user turn and any tool turns added
     if (err.stopped) {
-      // User pressed Stop: keep whatever was generated so they can continue.
-      if (bubble && lastFull.trim()) {
-        history.push({ role: "model", parts: [{ text: lastFull }] });
-      } else {
-        if (bubble) bubble.remove();
-        history.pop(); // nothing generated — drop the user turn
-      }
       setGroupState("idle");
     } else {
-      if (bubble) bubble.remove();
-      history.pop(); // keep retry/history clean
       appendErrorMessage(err, parts);
       setGroupState("error");
     }
@@ -452,65 +444,69 @@ async function runTurn(parts) {
   }
 }
 
-// Stream the model response (SSE). Calls onDelta(fullTextSoFar) as chunks
-// arrive and returns the final text. Aborts only on a stall (no bytes for
-// REQUEST_IDLE_MS), so a slow-but-progressing answer is never cut off.
-async function callGemini(onDelta) {
-  const url =
-    `${API_BASE}/${encodeURIComponent(settings.model)}:streamGenerateContent?alt=sse`;
+// Agentic browsing: the model calls browser tools (read_page/navigate/click)
+// on the bound tab in a loop until it produces a final answer. A request is
+// aborted only on a stall (no response for REQUEST_IDLE_MS) or a user Stop.
+const MAX_TOOL_STEPS = 8;
 
+const SYSTEM_PROMPT =
+  "Ти — браузерний асистент у бічній панелі Chrome. У тебе Є прямий доступ до " +
+  "прив'язаної вкладки через інструменти: read_page (прочитати вміст і посилання), " +
+  "navigate (перейти за URL), click (клікнути елемент за текстом). " +
+  "Коли запит стосується вмісту сайту — ОБОВ'ЯЗКОВО користуйся інструментами, " +
+  "переходь по сторінках і читай їх, перш ніж відповідати. Не кажи, що не маєш " +
+  "доступу до браузера — він у тебе є. Відповідай українською, стисло й по суті.";
+
+// Map an abort to the right error (user Stop vs idle stall).
+function makeAbortError() {
+  if (stopRequested) {
+    const e = new Error("Зупинено користувачем.");
+    e.stopped = true;
+    return e;
+  }
+  const e = new Error(
+    `Немає відповіді ${REQUEST_IDLE_MS / 1000} с. Модель перевантажена або ` +
+      "недоступна — спробуйте ще раз або оберіть іншу модель."
+  );
+  e.retryable = true;
+  return e;
+}
+
+// One non-streaming generateContent call with tools; returns the candidate.
+async function geminiOnce() {
+  const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
   const controller = new AbortController();
   currentController = controller;
-  let idle;
-  const resetIdle = () => {
-    clearTimeout(idle);
-    idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
-  };
+  const idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
   const t0 = Date.now();
-  resetIdle();
-  log("stream →", settings.model, `(${history.length} turns)`);
-
-  // An abort is either a user Stop or an idle stall — map to the right error.
-  const abortError = () => {
-    if (stopRequested) {
-      const e = new Error("Зупинено користувачем.");
-      e.stopped = true;
-      return e;
-    }
-    const e = new Error(
-      `Немає відповіді ${REQUEST_IDLE_MS / 1000} с. Модель перевантажена або ` +
-        "недоступна — спробуйте ще раз або оберіть іншу модель."
-    );
-    e.retryable = true;
-    return e;
-  };
 
   let resp;
   try {
     resp = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": settings.apiKey,
-      },
-      body: JSON.stringify({ contents: history }),
+      headers: { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey },
+      body: JSON.stringify({
+        contents: history,
+        tools: [{ function_declarations: Tools.declarations }],
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      }),
       signal: controller.signal,
     });
   } catch (err) {
     clearTimeout(idle);
     currentController = null;
-    if (err.name === "AbortError") { log("connect aborted"); throw abortError(); }
-    log("network error:", err?.message || err);
+    if (err.name === "AbortError") throw makeAbortError();
     const e = new Error("Помилка мережі: " + (err?.message || err));
     e.retryable = true;
     throw e;
+  } finally {
+    clearTimeout(idle);
+    currentController = null;
   }
 
   log("response", resp.status, `in ${Date.now() - t0}ms`);
 
   if (!resp.ok) {
-    clearTimeout(idle);
-    currentController = null;
     let detail = `HTTP ${resp.status}`;
     try {
       const e = await resp.json();
@@ -519,54 +515,57 @@ async function callGemini(onDelta) {
     throw buildApiError(resp.status, detail);
   }
 
-  // Parse the SSE body: lines of `data: {json}` separated by newlines.
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  let full = "";
-  let blocked = null;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      resetIdle();
-      buf += decoder.decode(value, { stream: true });
-
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        let obj;
-        try { obj = JSON.parse(payload); } catch (_) { continue; }
-        if (obj.promptFeedback?.blockReason) blocked = obj.promptFeedback.blockReason;
-        const txt = (obj.candidates?.[0]?.content?.parts || [])
-          .map((p) => p.text || "")
-          .join("");
-        if (txt) { full += txt; onDelta && onDelta(full); }
-      }
+  const data = await resp.json();
+  const cand = data.candidates?.[0];
+  if (!cand) {
+    if (data.promptFeedback?.blockReason) {
+      throw new Error("Запит заблоковано: " + data.promptFeedback.blockReason);
     }
-  } catch (err) {
-    if (err.name === "AbortError") { log("stream aborted"); throw abortError(); }
-    throw err;
-  } finally {
-    clearTimeout(idle);
-    currentController = null;
-  }
-
-  log("stream done", `${Date.now() - t0}ms`, `${full.length} chars`);
-
-  const out = full.trim();
-  if (!out) {
-    if (blocked) throw new Error("Запит заблоковано: " + blocked);
     const e = new Error("Порожня відповідь моделі.");
     e.retryable = true;
     throw e;
   }
-  return out;
+  return cand;
+}
+
+// Agentic loop: let the model call browser tools until it returns a final
+// answer. onStatus(text) shows progress (tool steps) in the bubble.
+async function callGemini(onStatus) {
+  let steps = "";
+
+  for (let i = 0; i < MAX_TOOL_STEPS; i++) {
+    const cand = await geminiOnce();
+    const parts = cand.content?.parts || [];
+    const calls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+
+    if (calls.length) {
+      // Record the model's tool calls, run them, feed results back.
+      history.push({ role: "model", parts: calls.map((fc) => ({ functionCall: fc })) });
+      const responses = [];
+      for (const fc of calls) {
+        const lbl = Tools.label(fc.name, fc.args);
+        steps += `🔧 ${lbl}\n`;
+        onStatus && onStatus(steps);
+        log("tool", fc.name, fc.args || {});
+        const result = await Tools.exec(fc.name, fc.args || {});
+        responses.push({ functionResponse: { name: fc.name, response: result } });
+      }
+      history.push({ role: "user", parts: responses });
+      continue;
+    }
+
+    const text = parts.map((p) => p.text || "").join("").trim();
+    if (text) return text;
+    const e = new Error("Порожня відповідь моделі.");
+    e.retryable = true;
+    throw e;
+  }
+
+  const e = new Error(
+    `Досягнуто ліміт кроків (${MAX_TOOL_STEPS}). Уточни запит або спробуй ще раз.`
+  );
+  e.retryable = true;
+  throw e;
 }
 
 // Classify API failures so the UI can offer the right recovery action.
