@@ -140,6 +140,32 @@ const Eyes = (() => {
     }
   }
 
+  // Evaluate a JS expression in the page's MAIN world (via the debugger) and
+  // return its value, or an error. Enables precise control of SPA widgets.
+  async function evaluate(expression) {
+    if (attachedTabId == null) return { error: "Debugger not attached" };
+    try {
+      const res = await send(attachedTabId, "Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+        timeout: 8000,
+        userGesture: true,
+      });
+      if (res.exceptionDetails) {
+        return {
+          error:
+            res.exceptionDetails.exception?.description ||
+            res.exceptionDetails.text ||
+            "JavaScript error",
+        };
+      }
+      return { value: res.result?.value ?? null };
+    } catch (err) {
+      return { error: String(err?.message || err) };
+    }
+  }
+
   // Compact text block of recent console + network for the prompt.
   function debugText() {
     if (attachedTabId == null) return "";
@@ -163,5 +189,5 @@ const Eyes = (() => {
     return s.length > n ? s.slice(0, n) + "…" : s;
   }
 
-  return { attach, detach, isAttached, screenshot, debugText, get tabId() { return attachedTabId; } };
+  return { attach, detach, isAttached, screenshot, debugText, evaluate, get tabId() { return attachedTabId; } };
 })();

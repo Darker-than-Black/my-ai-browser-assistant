@@ -69,6 +69,21 @@ const Tools = (() => {
         "Read the tab's console logs and network requests (JS errors, API calls). Works only when eye mode is enabled (the 👁️ button).",
       parameters: { type: "object", properties: {} },
     },
+    {
+      name: "run_js",
+      description:
+        "Run a JavaScript expression in the page's MAIN world and return its value. Use this when click/type by text fail on SPA (Vue/React) widgets: directly query and act on the DOM, e.g. document.querySelector('button.filter').click(), read dynamic values like document.querySelector('.results-count').innerText, or inspect elements. Requires eye mode (👁️). After a call that changes the DOM, follow with read_page or look to see the new state.",
+      parameters: {
+        type: "object",
+        properties: {
+          code: {
+            type: "string",
+            description: "A JS expression to evaluate, e.g. document.querySelectorAll('.tender').length",
+          },
+        },
+        required: ["code"],
+      },
+    },
   ];
 
   // ---- Page snapshot (runs in the page) ----
@@ -193,6 +208,7 @@ const Tools = (() => {
           const r = res?.result || { clicked: false };
           if (!r.clicked) return { clicked: false, error: `No element containing text "${text}" found` };
           await waitComplete(tabId);
+          await new Promise((rsv) => setTimeout(rsv, 500)); // let SPA render (dropdowns, etc.)
           return { clicked: true, clickedText: r.text, page: await snapshot(tabId) };
         }
 
@@ -271,6 +287,17 @@ const Tools = (() => {
           return { ok: true, data: Eyes.debugText() || "(empty for now)" };
         }
 
+        case "run_js": {
+          const code = String(args?.code || "");
+          if (typeof Eyes === "undefined" || !Eyes.isAttached(tabId)) {
+            return { error: "Enable the 👁️ button to run JS (it requires the debugger)." };
+          }
+          const r = await Eyes.evaluate(code);
+          if (r.error) return { error: r.error };
+          await new Promise((rsv) => setTimeout(rsv, 400)); // let DOM settle
+          return { result: r.value ?? null };
+        }
+
         default:
           return { error: "Unknown tool: " + name };
       }
@@ -288,6 +315,7 @@ const Tools = (() => {
       case "type": return `ввід «${args?.text || ""}»` + (args?.into ? ` → ${args.into}` : "");
       case "look": return "дивлюсь (скриншот)";
       case "read_console": return "читаю консоль";
+      case "run_js": return "JS: " + String(args?.code || "").slice(0, 60);
       default: return name;
     }
   }
