@@ -451,22 +451,26 @@ async function runTurn(parts) {
 // Agentic browsing: the model calls browser tools (read_page/navigate/click)
 // on the bound tab in a loop until it produces a final answer. A request is
 // aborted only on a stall (no response for REQUEST_IDLE_MS) or a user Stop.
-const MAX_TOOL_STEPS = 12;
+const MAX_TOOL_STEPS = 25;
 
 const SYSTEM_PROMPT =
   "Ти — браузерний АГЕНТ у бічній панелі Chrome з прямим доступом до прив'язаної " +
-  "вкладки через інструменти: read_page (вміст + посилання), navigate (перейти за " +
-  "URL), click (клік по елементу за текстом). " +
+  "вкладки через інструменти: read_page (вміст + посилання + controls/buttons), " +
+  "navigate (перейти за URL), click (клік по елементу за текстом), type (ввести " +
+  "текст у поле і побачити автопідказки). " +
   "Правила:\n" +
-  "1. Виконуй задачу САМ через інструменти. НІКОЛИ не відповідай у стилі «зробіть це " +
-  "самостійно» чи «виконайте кроки» — сам натискай фільтри, переходь і читай.\n" +
-  "2. Фільтри на сайтах часто задаються через URL (query-параметри) — за потреби " +
-  "формуй потрібний URL і використовуй navigate.\n" +
-  "3. Продовжуй викликати інструменти, поки не отримаєш ТОЧНУ відповідь (напр. число " +
-  "результатів). Прочитай текст сторінки результатів і назви точну цифру.\n" +
-  "4. Якщо інструмент повернув error — спробуй інший шлях (інший текст для click, " +
-  "прямий navigate), не здавайся після першої невдачі.\n" +
-  "5. Відповідай українською, стисло, лише коли маєш фактичний результат.";
+  "1. Спершу коротко сплануй кроки подумки, потім виконуй їх САМ через інструменти. " +
+  "НІКОЛИ не відповідай у стилі «зробіть самостійно» — сам натискай фільтри, переходь, читай.\n" +
+  "2. НЕ ВГАДУЙ значення фільтрів. Спочатку read_page і дивись `controls` — у select " +
+  "options лежать точні коди (регіон/категорія). Бери value звідти.\n" +
+  "3. Для фільтра з пошуком: click (відкрити), потім type (ввести назву), прочитай " +
+  "підказки у відповіді й обери потрібну (click по підказці).\n" +
+  "4. Фільтри часто кодуються в URL (query-параметри) — можна формувати URL і navigate.\n" +
+  "5. Якщо інструмент повернув error або той самий підхід не дав результату — зміни " +
+  "підхід, не повторюй однаковий виклик.\n" +
+  "6. Продовжуй, поки не матимеш ТОЧНУ відповідь (напр. число результатів): прочитай " +
+  "текст сторінки результатів і назви точну цифру.\n" +
+  "7. Відповідай українською, стисло, лише коли маєш фактичний результат.";
 
 // Map an abort to the right error (user Stop vs idle stall).
 function makeAbortError() {
@@ -542,6 +546,8 @@ async function geminiOnce() {
 // Agentic loop: let the model call browser tools until it returns a final
 // answer. onStep(label) logs each tool step as a persistent line in the chat.
 async function callGemini(onStep) {
+  const seen = new Map(); // tool-call signature -> count, to break loops
+
   for (let i = 0; i < MAX_TOOL_STEPS; i++) {
     const cand = await geminiOnce();
     const parts = cand.content?.parts || [];
@@ -555,7 +561,22 @@ async function callGemini(onStep) {
       for (const fc of calls) {
         onStep && onStep(Tools.label(fc.name, fc.args));
         log("tool", fc.name, fc.args || {});
-        const result = await Tools.exec(fc.name, fc.args || {});
+
+        // Loop guard: if the model repeats the exact same call, nudge instead
+        // of executing it again.
+        const sig = fc.name + ":" + JSON.stringify(fc.args || {});
+        const n = (seen.get(sig) || 0) + 1;
+        seen.set(sig, n);
+        let result;
+        if (n >= 3) {
+          result = {
+            error:
+              "Ти вже викликав це двічі з тими самими аргументами. Зміни підхід " +
+              "(інший URL/текст/поле) або дай фінальну відповідь із наявних даних.",
+          };
+        } else {
+          result = await Tools.exec(fc.name, fc.args || {});
+        }
         responses.push({ functionResponse: { name: fc.name, response: result } });
       }
       history.push({ role: "user", parts: responses });

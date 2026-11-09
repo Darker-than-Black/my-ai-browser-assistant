@@ -41,10 +41,28 @@ const Tools = (() => {
         required: ["text"],
       },
     },
+    {
+      name: "type",
+      description:
+        "Ввести текст у поле вводу (пошук, фільтр) і повернути оновлену сторінку разом із підказками автозаповнення, що з'явилися. Спершу за потреби клікни, щоб відкрити потрібне поле/фільтр.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Текст для введення" },
+          into: {
+            type: "string",
+            description: "Частина label/placeholder поля; лишити порожнім — активне або перше видиме поле",
+          },
+        },
+        required: ["text"],
+      },
+    },
   ];
 
   // ---- Page snapshot (runs in the page) ----
   function pageSnapshotFn(linkCap, textCap) {
+    const visible = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
+
     const links = [...document.querySelectorAll("a[href]")]
       .map((a) => ({
         text: (a.innerText || a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80),
@@ -52,11 +70,54 @@ const Tools = (() => {
       }))
       .filter((l) => l.text && /^https?:/.test(l.href))
       .slice(0, linkCap);
+
+    // Interactive controls, so the agent sees exact filter values instead of
+    // guessing them (e.g. <select> option values = region/category codes).
+    const controls = [];
+    const nodes = document.querySelectorAll(
+      'input:not([type=hidden]), textarea, select, [role=checkbox], [role=combobox], [contenteditable=true]'
+    );
+    for (const el of nodes) {
+      if (controls.length >= 60 || !visible(el)) continue;
+      const tag = el.tagName.toLowerCase();
+      const label = (el.getAttribute("aria-label") || el.placeholder || el.name || el.id || "")
+        .toString().trim().slice(0, 60);
+      if (tag === "select") {
+        const options = [...el.options].slice(0, 25).map((o) => ({
+          value: o.value,
+          text: (o.text || "").trim().slice(0, 50),
+        }));
+        controls.push({ type: "select", label, value: el.value, options });
+      } else if (el.type === "checkbox" || el.type === "radio" || el.getAttribute("role") === "checkbox") {
+        controls.push({
+          type: el.type || "checkbox",
+          label,
+          value: el.value || "",
+          checked: el.checked || el.getAttribute("aria-checked") === "true",
+        });
+      } else {
+        controls.push({
+          type: el.type || tag,
+          label,
+          placeholder: el.placeholder || "",
+          value: (el.value || el.textContent || "").toString().slice(0, 40),
+        });
+      }
+    }
+
+    const buttons = [...document.querySelectorAll('button, [role="button"]')]
+      .filter(visible)
+      .map((b) => (b.innerText || b.textContent || "").trim().replace(/\s+/g, " ").slice(0, 50))
+      .filter(Boolean)
+      .slice(0, 40);
+
     return {
       url: location.href,
       title: document.title,
       text: (document.body?.innerText || "").replace(/\n{3,}/g, "\n\n").slice(0, textCap),
       links,
+      controls,
+      buttons,
     };
   }
 
@@ -123,6 +184,50 @@ const Tools = (() => {
           return { clicked: true, clickedText: r.text, page: await snapshot(tabId) };
         }
 
+        case "type": {
+          const text = String(args?.text || "");
+          const into = String(args?.into || "");
+          const [res] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (txt, hint) => {
+              const vis = [...document.querySelectorAll(
+                'input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, [contenteditable=true]'
+              )].filter((e) => e.offsetParent !== null);
+              let el = null;
+              if (hint) {
+                const n = hint.toLowerCase();
+                el = vis.find((e) =>
+                  ((e.getAttribute("aria-label") || e.placeholder || e.name || e.id || "")
+                    .toLowerCase().includes(n))
+                );
+              }
+              if (!el && vis.includes(document.activeElement)) el = document.activeElement;
+              if (!el) el = vis[0];
+              if (!el) return { typed: false };
+              el.focus();
+              if (el.isContentEditable) {
+                el.textContent = txt;
+              } else {
+                const setter = Object.getOwnPropertyDescriptor(
+                  el.constructor.prototype, "value"
+                )?.set;
+                if (setter) setter.call(el, txt); else el.value = txt;
+              }
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+              const k = txt.slice(-1) || "a";
+              el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: k }));
+              el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: k }));
+              return { typed: true, field: (el.getAttribute("aria-label") || el.placeholder || el.name || "").slice(0, 60) };
+            },
+            args: [text, into],
+          });
+          const r = res?.result || { typed: false };
+          if (!r.typed) return { typed: false, error: "Поле вводу не знайдено" };
+          await new Promise((rsv) => setTimeout(rsv, 800)); // let suggestions load
+          return { typed: true, field: r.field, page: await snapshot(tabId) };
+        }
+
         default:
           return { error: "Невідомий інструмент: " + name };
       }
@@ -137,6 +242,7 @@ const Tools = (() => {
       case "read_page": return "читаю сторінку…";
       case "navigate": return "переходжу: " + (args?.url || "");
       case "click": return "клік: " + (args?.text || "");
+      case "type": return `ввід «${args?.text || ""}»` + (args?.into ? ` → ${args.into}` : "");
       default: return name;
     }
   }
