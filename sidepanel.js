@@ -50,6 +50,9 @@ const els = {
   modelQuick: document.getElementById("model-quick"),
   saveSettingsBtn: document.getElementById("save-settings-btn"),
   settingsStatus: document.getElementById("settings-status"),
+  mascot: document.getElementById("mascot"),
+  renameSessionBtn: document.getElementById("rename-session-btn"),
+  deleteSessionBtn: document.getElementById("delete-session-btn"),
 };
 
 // ---- State ----
@@ -65,12 +68,19 @@ let busy = false;
 // Assistant tab group: scopes the assistant to one browser window and shows
 // request status in the group title. title-only (Chrome tab groups have no
 // icon field), so status is signalled with an emoji prefix.
-const GROUP_NAME = "My assistant";
+const GROUP_NAME = "MAD";
 const GROUP_STATES = {
-  idle: GROUP_NAME,
+  idle: "😺 " + GROUP_NAME,
   busy: "⏳ " + GROUP_NAME,
   done: "✅ " + GROUP_NAME,
   error: "⚠️ " + GROUP_NAME,
+};
+// Cat mascot face + animation class per state (reflected in the panel header).
+const MASCOT_STATES = {
+  idle: { face: "🐱", cls: "" },
+  busy: { face: "🙀", cls: "thinking" },
+  done: { face: "😺", cls: "happy" },
+  error: { face: "😿", cls: "sad" },
 };
 let assistant = { groupId: null, windowId: null, tabId: null };
 
@@ -188,7 +198,7 @@ async function resolveBoundTab() {
 }
 
 // ---- Assistant tab group ----
-// Group the current tab into a "My assistant" group so the assistant is bound
+// Group the current tab into a "MAD" group so the assistant is bound
 // to this window. Reuses an existing group if the active tab already has one.
 async function ensureAssistantGroup() {
   if (!chrome.tabGroups || !chrome.tabs?.group) return; // API unavailable
@@ -223,7 +233,27 @@ async function groupIsValid(groupId) {
 }
 
 // Update the group title to reflect request status (idle/busy/done/error).
+// Reflect the current state on the header cat mascot (face + a short animation).
+let mascotResetTimer = null;
+function setMascot(state) {
+  const m = els.mascot;
+  if (!m) return;
+  const spec = MASCOT_STATES[state] || MASCOT_STATES.idle;
+  m.textContent = spec.face;
+  m.classList.remove("thinking", "happy", "sad");
+  if (spec.cls) m.classList.add(spec.cls);
+  clearTimeout(mascotResetTimer);
+  // Momentary reactions (done/error) relax back to the calm idle cat.
+  if (state === "done" || state === "error") {
+    mascotResetTimer = setTimeout(() => {
+      m.classList.remove("happy", "sad");
+      m.textContent = MASCOT_STATES.idle.face;
+    }, 1600);
+  }
+}
+
 async function setGroupState(state) {
+  setMascot(state);
   const title = GROUP_STATES[state] || GROUP_NAME;
   try {
     if (!(await groupIsValid(assistant.groupId))) {
@@ -316,6 +346,8 @@ function wireEvents() {
   els.macroPlay.addEventListener("click", playSelectedMacro);
   els.sessionSelect.addEventListener("change", (e) => switchSession(e.target.value));
   els.newSessionBtn.addEventListener("click", () => newSession(true));
+  els.renameSessionBtn.addEventListener("click", renameSession);
+  els.deleteSessionBtn.addEventListener("click", deleteSession);
   setupTooltips();
   window.addEventListener("pagehide", () => { if (eyesOn) Eyes.detach(); });
   els.clearBtn.addEventListener("click", clearChat);
@@ -452,8 +484,9 @@ function populateMacros() {
   els.macroSelect.innerHTML = "";
   if (!names.length) {
     const opt = document.createElement("option");
-    opt.textContent = "макроси —";
+    opt.textContent = "🎬 сценаріїв ще нема";
     opt.value = "";
+    opt.disabled = true;
     els.macroSelect.appendChild(opt);
   } else {
     for (const n of names) {
@@ -656,13 +689,13 @@ function clearChat() {
   pageContext = null;
   updateContextBadge();
   renderAttachments();
-  els.chatLog.innerHTML = '<div class="msg gemini">Чат очищено. Чим можу допомогти?</div>';
+  els.chatLog.innerHTML = '<div class="msg gemini pop">Чисто! 🧹🐱 Про що поговоримо далі?</div>';
   updateSendButton();
   persistActive();
 }
 
 // ---- Sessions (persistent, multi-chat) ----
-const WELCOME_HTML = '<div class="msg gemini">Вітаю! Чим можу допомогти на цій сторінці?</div>';
+const WELCOME_HTML = '<div class="msg gemini">Мяу! 🐱 Я Діма — твій котик-помічник. Відкрий будь-яку сторінку й питай — підкажу, знайду, заповню форму чи натисну кнопку. З чого почнемо?</div>';
 
 function newId() {
   return "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -679,9 +712,12 @@ function persistableHistory() {
 }
 
 function sessionTitle() {
+  // A name the user typed wins; otherwise auto-name from the first message.
+  const custom = sessions[sessionId]?.customTitle;
+  if (custom) return custom;
   const firstUser = transcript.find((t) => t.role === "user" && t.text);
   if (firstUser) return firstUser.text.slice(0, 40);
-  return "Новий чат";
+  return "Нова розмова";
 }
 
 function persistActive() {
@@ -689,12 +725,42 @@ function persistActive() {
   sessions[sessionId] = {
     id: sessionId,
     title: sessionTitle(),
+    customTitle: sessions[sessionId]?.customTitle || "",
     updatedAt: Date.now(),
     history: persistableHistory(),
     transcript: transcript.slice(-80),
   };
   chrome.storage.local.set({ sessions, activeSessionId: sessionId });
   populateSessions();
+}
+
+// Give the current conversation a custom name.
+function renameSession() {
+  if (!sessionId || busy) return;
+  const cur = sessions[sessionId]?.customTitle || sessions[sessionId]?.title || "";
+  const name = (window.prompt("Назва розмови:", cur) || "").trim();
+  if (!name) return;
+  sessions[sessionId].customTitle = name.slice(0, 60);
+  sessions[sessionId].title = name.slice(0, 60);
+  chrome.storage.local.set({ sessions });
+  populateSessions();
+}
+
+// Delete the current conversation; fall back to another or a fresh one.
+async function deleteSession() {
+  if (!sessionId || busy) return;
+  const name = sessions[sessionId]?.title || "цю розмову";
+  if (!window.confirm(`Видалити «${name}»? Цю дію не скасувати.`)) return;
+  delete sessions[sessionId];
+  const rest = Object.values(sessions).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  await chrome.storage.local.set({ sessions });
+  if (rest.length) {
+    loadSessionInto(rest[0].id);
+    chrome.storage.local.set({ activeSessionId: sessionId });
+    populateSessions();
+  } else {
+    await newSession(false);
+  }
 }
 
 function loadSessionInto(id) {
@@ -713,7 +779,8 @@ async function newSession(persistCurrent) {
   transcript = [];
   sessions[sessionId] = {
     id: sessionId,
-    title: "Новий чат",
+    title: "Нова розмова",
+    customTitle: "",
     updatedAt: Date.now(),
     history: [],
     transcript: [],
@@ -737,16 +804,29 @@ function switchSession(id) {
   populateSessions();
 }
 
+function fmtDay(ts) {
+  if (!ts) return "";
+  const d = new Date(ts), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return d.toLocaleTimeString("uk", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString("uk", { day: "2-digit", month: "2-digit" });
+}
+
 function populateSessions() {
   const list = Object.values(sessions).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   els.sessionSelect.innerHTML = "";
   for (const s of list) {
     const opt = document.createElement("option");
     opt.value = s.id;
-    opt.textContent = s.title || "Новий чат";
+    const when = fmtDay(s.updatedAt);
+    opt.textContent = `🐾 ${s.title || "Нова розмова"}${when ? " · " + when : ""}`;
     els.sessionSelect.appendChild(opt);
   }
   if (sessionId) els.sessionSelect.value = sessionId;
+  // With a single conversation the switcher adds no value — collapse it to just
+  // the ＋ button so the bar stays uncluttered until there's real history.
+  const bar = els.sessionSelect.parentElement;
+  if (bar) bar.classList.toggle("single", list.length <= 1);
 }
 
 // Rebuild the chat log from the saved display transcript.
@@ -1256,7 +1336,7 @@ function renderUserBubble(text, images) {
 
 function appendMessage(text, sender) {
   const div = document.createElement("div");
-  div.className = `msg ${sender}`;
+  div.className = `msg ${sender}${sender === "gemini" ? " pop" : ""}`;
   if (sender === "gemini") {
     div.innerHTML = renderMarkdown(text); // safe: renderer escapes first
   } else {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Gemini Side Assistant",
+  "name": "MAD — My assistant Dima",
   "version": "0.1.0",
-  "description": "Контекстний помічник Gemini у бічній панелі браузера",
+  "description": "😺 Твій котик-помічник у бічній панелі: читає сторінку, відповідає й може сам клікати та заповнювати форми.",
   "permissions": [
     "sidePanel",
     "activeTab",
@@ -23,7 +23,19 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
-    "default_title": "Відкрити Gemini Panel"
+    "default_title": "Відкрити MAD — помічника Діми 😺",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   }
 }

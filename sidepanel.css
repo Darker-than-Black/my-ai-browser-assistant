@@ -6,6 +6,8 @@
   --text-muted: #a1a1aa;
   --accent: #38bdf8;
   --accent-hover: #0ea5e9;
+  --accent2: #fb7185;
+  --accent2-soft: rgba(251, 113, 133, 0.16);
   --user-msg: #065f46;
   --user-text: #e6fffa;
   --gemini-msg: #27272a;
@@ -22,6 +24,8 @@
     --text-muted: #52525b;
     --accent: #0284c7;
     --accent-hover: #0369a1;
+    --accent2: #e11d6b;
+    --accent2-soft: rgba(225, 29, 107, 0.10);
     --user-msg: #d1fae5;
     --user-text: #064e3b;
     --gemini-msg: #f4f4f5;
@@ -36,6 +40,8 @@
   --text-muted: #52525b;
   --accent: #0284c7;
   --accent-hover: #0369a1;
+  --accent2: #e11d6b;
+  --accent2-soft: rgba(225, 29, 107, 0.10);
   --user-msg: #d1fae5;
   --user-text: #064e3b;
   --gemini-msg: #f4f4f5;
@@ -69,6 +75,53 @@ header {
 }
 
 h2 { font-size: 1rem; margin: 0; color: var(--accent); }
+
+/* Brand with cat mascot */
+.brand { display: flex; align-items: center; gap: 7px; }
+.brand-name {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.mascot {
+  font-size: 20px;
+  line-height: 1;
+  display: inline-block;
+  cursor: pointer;
+  transform-origin: 50% 80%;
+  animation: mascot-idle 3.2s ease-in-out infinite;
+  user-select: none;
+}
+.mascot:hover { animation: mascot-happy 0.5s ease-in-out; }
+.mascot.thinking { animation: mascot-think 0.9s ease-in-out infinite; }
+.mascot.happy { animation: mascot-happy 0.6s ease-in-out; }
+.mascot.sad { animation: mascot-sad 0.5s ease-in-out; }
+
+@keyframes mascot-idle {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-2px) rotate(-3deg); }
+}
+@keyframes mascot-think {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(8deg); }
+}
+@keyframes mascot-happy {
+  0% { transform: scale(1) rotate(0); }
+  30% { transform: scale(1.3) rotate(-10deg); }
+  60% { transform: scale(1.15) rotate(10deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+@keyframes mascot-sad {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  25% { transform: translateX(-3px) rotate(-6deg); }
+  75% { transform: translateX(3px) rotate(6deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mascot, .mascot:hover, .mascot.thinking, .mascot.happy, .mascot.sad { animation: none; }
+}
 
 .header-actions { display: flex; gap: 4px; }
 
@@ -338,3 +391,78 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 #tooltip .tip-line { color: var(--text-muted); margin-top: 3px; }
 #tooltip .tip-line.cur { color: var(--text-main); }
 #tooltip .tip-line.cur::before { content: "➤ "; color: var(--accent); }
+
+/* ===== Playful "MAD" theme extras ===== */
+
+/* Bouncier icon buttons */
+.icon-btn { transition: background 0.15s, transform 0.12s, border-color 0.15s; }
+.icon-btn:hover { transform: translateY(-1px) scale(1.08); }
+.icon-btn:active { transform: scale(0.94); }
+
+/* Primary button: rounder, springy, dual-accent glow */
+button.primary {
+  border-radius: 999px;
+  box-shadow: 0 2px 10px var(--accent2-soft);
+  transition: background 0.15s, transform 0.12s, box-shadow 0.15s;
+}
+button.primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--accent2-soft); }
+button.primary:active { transform: translateY(0) scale(0.97); }
+
+/* Softer, rounder chat surfaces */
+#chat-log { border-radius: 14px; }
+.msg { border-radius: 14px; }
+.msg.user { border-bottom-right-radius: 4px; }
+.msg.gemini { border-bottom-left-radius: 4px; }
+
+/* New incoming cat message: gentle pop-in */
+.msg.gemini.pop { animation: msg-pop 0.28s ease-out; }
+@keyframes msg-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Paw-print bullets in cat messages */
+.msg.gemini ul { list-style: none; padding-left: 20px; }
+.msg.gemini ul li { position: relative; }
+.msg.gemini ul li::before {
+  content: "🐾";
+  position: absolute;
+  left: -20px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+/* Rounder inputs & selects to match */
+textarea, #session-select, .model-quick, .field input, .field select {
+  border-radius: 10px;
+}
+
+/* Session bar: delete button turns rose on hover */
+#delete-session-btn:hover { color: var(--accent2); border-color: var(--accent2); background: var(--accent2-soft); }
+
+/* Recording pulse so it's obvious a macro is being captured */
+#record-btn.active { animation: rec-pulse 1s ease-in-out infinite; }
+@keyframes rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
+}
+
+/* Empty-macro hint styling (injected option is greyed/italic) */
+.model-quick option[disabled] { font-style: italic; color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn, button.primary, .msg.gemini.pop, #record-btn.active { animation: none; transition: none; }
+  .icon-btn:hover, button.primary:hover { transform: none; }
+}
+
+/* Single-conversation state: collapse the switcher to just the ＋ button */
+.session-bar.single #session-select,
+.session-bar.single #rename-session-btn,
+.session-bar.single #delete-session-btn { display: none; }
+.session-bar.single::before {
+  content: "🐾 Почни нову розмову";
+  flex: 1;
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}

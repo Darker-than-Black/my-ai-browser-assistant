@@ -3,49 +3,52 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gemini Side Panel</title>
+  <title>MAD — My assistant Dima</title>
   <link rel="stylesheet" href="sidepanel.css" />
 </head>
 <body>
   <header>
-    <h2>Gemini Assistant</h2>
+    <h2 class="brand">
+      <span id="mascot" class="mascot" title="Привіт! Я котик-помічник 😺">🐱</span>
+      <span class="brand-name">My assistant Dima</span>
+    </h2>
     <div class="header-actions">
       <button id="context-btn" class="icon-btn active"
-        data-tip="Автоконтекст сторінки"
-        data-on="УВІМК: перед кожним запитом асистент читає текст поточної вкладки й додає його до промпту — відповідає з урахуванням сторінки."
-        data-off="ВИМК: сторінка не читається; асистент відповідає лише на твій текст.">📄</button>
+        data-tip="Читати сторінку"
+        data-on="УВІМК: котик зазирає на поточну вкладку й враховує її у відповіді."
+        data-off="ВИМК: котик відповідає лише на твій текст, сторінку не читає.">📄</button>
       <button id="eyes-btn" class="icon-btn"
-        data-tip="Очі (налагодження вкладки)"
-        data-on="УВІМК: асистент бачить скриншот, консоль і мережу вкладки; доступні run_js/dom_map над DOM. Chrome показує жовтий банер налагодження."
-        data-off="ВИМК: лише текст сторінки; run_js недоступний.">👁️</button>
+        data-tip="Пильні очі"
+        data-on="УВІМК: котик бачить скриншот, консоль і мережу вкладки та може сам клікати й друкувати на сторінці. Chrome покаже жовту смужку налагодження — це нормально."
+        data-off="ВИМК: котик лише читає текст сторінки й нічого на ній не чіпає.">👁️</button>
       <button id="confirm-btn" class="icon-btn"
-        data-tip="Підтвердження дій"
-        data-on="УВІМК: перед кожною дією, що змінює сторінку (клік / ввід / перехід / JS), асистент питає дозвіл. Безпечно на реальних формах."
-        data-off="ВИМК: асистент виконує дії одразу, без запитань — швидше, але ризикованіше.">✋</button>
+        data-tip="Питати дозвіл"
+        data-on="УВІМК: перед кожною дією на сторінці (клік / ввід / перехід) котик спитає «можна?». Безпечно для справжніх форм."
+        data-off="ВИМК: котик діє одразу, без запитань — швидше, але сміливіше.">✋</button>
       <button id="theme-btn" class="icon-btn"
         data-tip="Тема оформлення"
-        data-desc="Перемикає по колу: авто (за системою) → темна → світла. Поточний режим показує іконка.">🌓</button>
+        data-desc="Клік по колу: авто (за системою) → темна → світла. Поточний режим — на іконці.">🌓</button>
       <button id="clear-btn" class="icon-btn"
-        data-tip="Очистити чат"
-        data-desc="Стирає повідомлення поточного чату. Сама сесія лишається у списку.">🗑️</button>
+        data-tip="Прибрати чат"
+        data-desc="Стирає повідомлення цієї розмови. Сам чат лишається у списку.">🧹</button>
       <button id="settings-btn" class="icon-btn"
         data-tip="Налаштування"
-        data-desc="API-ключ і вибір моделі.">⚙️</button>
+        data-desc="Ключ API та яку модель котик використовує.">⚙️</button>
     </div>
   </header>
 
   <!-- Settings view -->
   <section id="settings-view" class="hidden">
     <label class="field">
-      <span>Gemini API ключ</span>
+      <span>Ключ Gemini API</span>
       <input id="api-key-input" type="password" placeholder="AIza..." autocomplete="off" />
-      <small>Отримати ключ: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Ключ зберігається локально у браузері.</small>
+      <small>Де взяти ключ: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Ключ зберігається лише у твоєму браузері.</small>
     </label>
     <label class="field">
       <span>Модель</span>
       <select id="model-select"></select>
     </label>
-    <button id="save-settings-btn" class="primary">Зберегти</button>
+    <button id="save-settings-btn" class="primary">Зберегти 😺</button>
     <p id="settings-status" class="status"></p>
   </section>
 
@@ -53,44 +56,51 @@
   <section id="chat-view">
     <div class="session-bar">
       <select id="session-select"
-        data-tip="Чати"
-        data-desc="Перемикання між збереженими розмовами. Кожна зберігається окремо й відновлюється після перезапуску."></select>
+        data-tip="Твої розмови"
+        data-desc="Усі збережені розмови з котиком. Кожна зберігається окремо й відновлюється після перезапуску."></select>
+      <button id="rename-session-btn" class="icon-btn"
+        data-tip="Перейменувати розмову"
+        data-desc="Дати цій розмові свою назву.">✏️</button>
+      <button id="delete-session-btn" class="icon-btn"
+        data-tip="Видалити розмову"
+        data-desc="Прибрати цю розмову назавжди.">🗑️</button>
       <button id="new-session-btn" class="icon-btn"
-        data-tip="Новий чат"
-        data-desc="Створити порожній чат. Поточний зберігається у списку.">＋</button>
+        data-tip="Нова розмова"
+        data-desc="Почати чисту розмову. Поточна збережеться у списку.">＋</button>
     </div>
     <div id="chat-log">
-      <div class="msg gemini">Вітаю! Чим можу допомогти на цій сторінці?</div>
+      <div class="msg gemini">Мяу! 🐱 Я Діма — твій котик-помічник. Відкрий будь-яку сторінку й питай — підкажу, знайду, заповню форму чи натисну кнопку. З чого почнемо?</div>
     </div>
 
     <div id="attachments"></div>
 
     <div class="input-container">
       <div class="input-row">
-        <textarea id="user-input" rows="2" placeholder="Введіть запит або опишіть задачу... (Enter — надіслати, Shift+Enter — новий рядок)"></textarea>
+        <textarea id="user-input" rows="2" placeholder="Напиши, що зробити… (Enter — надіслати, Shift+Enter — новий рядок) 🐾"></textarea>
       </div>
       <div class="input-controls">
         <button id="attach-btn" class="icon-btn"
-          data-tip="Додати зображення"
-          data-desc="Прикріпити картинки до запиту. Також працює вставка Ctrl+V.">🖼️</button>
+          data-tip="Додати картинку"
+          data-desc="Прикріпи зображення до запиту. Також працює вставка Ctrl+V.">🖼️</button>
         <input id="file-input" type="file" accept="image/*" multiple hidden />
         <button id="record-btn" class="icon-btn"
-          data-tip="Запис макросу"
-          data-on="ЗАПИС іде: усі дії агента фіксуються. Натисни ще раз — задати назву й зберегти."
-          data-off="ВИМК: натисни, щоб почати запис послідовності дій для повторного відтворення.">🎬</button>
+          data-tip="Записати сценарій дій"
+          data-on="🔴 ЙДЕ ЗАПИС: котик запам'ятовує кожну свою дію. Натисни ще раз, щоб задати назву й зберегти."
+          data-off="Запиши послідовність дій раз — і повторюй її кнопкою ▶ без моделі. Зручно для рутини: логін, заповнити форму, QA-прогін.">🎬</button>
         <select id="macro-select" class="model-quick"
-          data-tip="Збережені макроси"
-          data-desc="Вибери записану послідовність дій, щоб потім відтворити її кнопкою ▶."></select>
+          data-tip="Збережені сценарії"
+          data-desc="Твої записані послідовності дій. Вибери одну й натисни ▶, щоб повторити.">
+        </select>
         <button id="macro-play" class="icon-btn"
-          data-tip="Відтворити макрос"
-          data-desc="Виконує вибраний макрос крок за кроком — без участі моделі (тільки записані дії).">▶</button>
-        <span id="context-badge" class="badge hidden">+ сторінка</span>
+          data-tip="Повторити сценарій"
+          data-desc="Виконує вибраний сценарій крок за кроком — швидко й безкоштовно, без моделі (лише записані дії).">▶</button>
+        <span id="context-badge" class="badge hidden">+ сторінка 🐾</span>
         <select id="model-quick" class="model-quick"
           data-tip="Модель"
-          data-desc="Поточна модель. Легші (Flash-Lite) — вищі безкоштовні ліміти й швидше; флагман — розумніший, але ліміти жорсткіші."></select>
+          data-desc="Легша (Flash-Lite) — швидша й більші безкоштовні ліміти; флагман — розумніший, але ліміти жорсткіші."></select>
         <button id="send-btn" class="primary"
-          data-tip="Надіслати / Стоп / Продовжити"
-          data-desc="Надсилає запит. Під час відповіді кнопка стає «Стоп». З порожнім полем — «Продовжити» з місця зупинки.">Надіслати</button>
+          data-tip="Надіслати / Стоп / Далі"
+          data-desc="Надсилає запит. Під час відповіді — «Стоп». З порожнім полем — «Далі» з місця зупинки.">Надіслати</button>
       </div>
     </div>
   </section>
