@@ -185,6 +185,7 @@ function populateModelSelects() {
 
 // Switch model from the chat bar without opening settings. Persists immediately.
 async function onQuickModelChange() {
+  if (busy) { els.modelQuick.value = settings.model; return; } // locked during request
   settings.model = els.modelQuick.value;
   els.modelSelect.value = settings.model;
   await chrome.storage.local.set({ model: settings.model });
@@ -700,6 +701,8 @@ function hasModelTurn() {
 // Button mode: busy → Стоп; empty input → Продовжити; otherwise → Надіслати.
 function updateSendButton() {
   const btn = els.sendBtn;
+  els.modelQuick.disabled = busy; // no model switch mid-request
+  els.modelQuick.title = busy ? "Зачекайте завершення запиту" : "Модель";
   if (busy) {
     btn.dataset.mode = "stop";
     btn.textContent = "Стоп";
