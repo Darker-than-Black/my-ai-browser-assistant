@@ -7,7 +7,39 @@
   --accent: #38bdf8;
   --accent-hover: #0ea5e9;
   --user-msg: #065f46;
+  --user-text: #e6fffa;
   --gemini-msg: #27272a;
+  --code-bg: #0b0b0d;
+}
+
+/* Light theme: auto (system) unless the user forced dark, or forced light. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg-color: #fafafa;
+    --panel-bg: #ffffff;
+    --border-color: #e4e4e7;
+    --text-main: #18181b;
+    --text-muted: #52525b;
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --user-msg: #d1fae5;
+    --user-text: #064e3b;
+    --gemini-msg: #f4f4f5;
+    --code-bg: #f1f5f9;
+  }
+}
+:root[data-theme="light"] {
+  --bg-color: #fafafa;
+  --panel-bg: #ffffff;
+  --border-color: #e4e4e7;
+  --text-main: #18181b;
+  --text-muted: #52525b;
+  --accent: #0284c7;
+  --accent-hover: #0369a1;
+  --user-msg: #d1fae5;
+  --user-text: #064e3b;
+  --gemini-msg: #f4f4f5;
+  --code-bg: #f1f5f9;
 }
 
 * { box-sizing: border-box; }
@@ -75,8 +107,8 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
   max-width: 90%;
   word-break: break-word;
 }
-.msg.user { background: var(--user-msg); align-self: flex-end; color: #e6fffa; }
-.msg.gemini { background: var(--gemini-msg); align-self: flex-start; border: 1px solid var(--border-color); }
+.msg.user { background: var(--user-msg); align-self: flex-end; color: var(--user-text); }
+.msg.gemini { background: var(--gemini-msg); align-self: flex-start; border: 1px solid var(--border-color); position: relative; }
 .msg.error { background: #7f1d1d; align-self: flex-start; color: #fecaca; }
 .msg img { max-width: 100%; border-radius: 6px; margin-top: 4px; }
 
@@ -84,15 +116,37 @@ h2 { font-size: 1rem; margin: 0; color: var(--accent); }
 .msg p { margin: 0 0 8px; }
 .msg p:last-child { margin-bottom: 0; }
 .msg pre {
-  background: #0b0b0d;
+  background: var(--code-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 8px;
   overflow-x: auto;
   margin: 6px 0;
+  position: relative;
 }
 .msg code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.msg :not(pre) > code { background: #0b0b0d; padding: 1px 4px; border-radius: 4px; }
+.msg :not(pre) > code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+
+/* Copy buttons (message + code block) and token note */
+.copy-msg, .copy-code {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.msg.gemini:hover > .copy-msg,
+.msg pre:hover > .copy-code { opacity: 0.85; }
+.copy-msg:hover, .copy-code:hover { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.tok { margin-top: 6px; font-size: 10px; color: var(--text-muted); opacity: 0.7; }
 .msg ul, .msg ol { margin: 4px 0 8px; padding-left: 20px; }
 .msg a { color: var(--accent); }
 .msg h1, .msg h2, .msg h3 { margin: 6px 0 4px; font-size: 1em; }

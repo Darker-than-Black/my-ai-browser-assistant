@@ -10,6 +10,19 @@ const MODELS = [
 ];
 const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
+// Thinking budget (tokens) per model. Makes the agent PLAN before each tool
+// call instead of reflex-probing the DOM. 0 = thinking off (Flash-Lite: keep
+// it off so the one model that survives the free tier stays fast and cheap).
+const THINKING_BUDGET = {
+  "gemini-3.5-flash-lite": 0,
+  "gemini-3.8-flash": 2048,
+  "gemini-4-argon": 4096,
+};
+
+// Selectable models. Starts as the curated hardcoded list; replaced by the live
+// ListModels result once a valid key is saved (falls back to this on failure).
+let models = MODELS.slice();
+
 // ---- DOM ----
 const els = {
   chatLog: document.getElementById("chat-log"),
@@ -20,6 +33,7 @@ const els = {
   attachments: document.getElementById("attachments"),
   contextBtn: document.getElementById("context-btn"),
   eyesBtn: document.getElementById("eyes-btn"),
+  themeBtn: document.getElementById("theme-btn"),
   contextBadge: document.getElementById("context-badge"),
   clearBtn: document.getElementById("clear-btn"),
   settingsBtn: document.getElementById("settings-btn"),
@@ -80,13 +94,14 @@ init();
 async function init() {
   populateModelSelects();
 
-  const stored = await chrome.storage.local.get(["apiKey", "model"]);
+  const stored = await chrome.storage.local.get(["apiKey", "model", "theme"]);
   settings.apiKey = stored.apiKey || "";
   settings.model = modelExists(stored.model) ? stored.model : DEFAULT_MODEL;
   els.apiKeyInput.value = settings.apiKey;
   els.modelSelect.value = settings.model;
   els.modelQuick.value = settings.model;
 
+  initTheme(stored.theme);
   if (!settings.apiKey) showSettings(true);
 
   wireEvents();
@@ -184,19 +199,56 @@ async function setGroupState(state) {
 }
 
 function modelExists(id) {
-  return MODELS.some((m) => m.id === id);
+  return models.some((m) => m.id === id);
 }
 
 function populateModelSelects() {
   for (const sel of [els.modelSelect, els.modelQuick]) {
     sel.innerHTML = "";
-    for (const m of MODELS) {
+    for (const m of models) {
       const opt = document.createElement("option");
       opt.value = m.id;
       opt.textContent = m.label;
       sel.appendChild(opt);
     }
   }
+}
+
+// Fetch the account's models that support generateContent (doubles as an API-key
+// check). Returns [{id,label}] or throws with a readable message.
+async function fetchModels(key) {
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(key)}`
+  );
+  if (!resp.ok) {
+    let body = null;
+    try { body = await resp.json(); } catch (_) {}
+    const e = new Error(errMessage(body, `HTTP ${resp.status}`));
+    e.status = resp.status;
+    throw e;
+  }
+  const data = await resp.json();
+  return (data.models || [])
+    .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+    .map((m) => ({
+      id: String(m.name || "").replace(/^models\//, ""),
+      label: m.displayName || String(m.name || "").replace(/^models\//, ""),
+    }))
+    .filter((m) => m.id);
+}
+
+// Validate the key and refresh the model list from it. Keeps the current
+// selection if it still exists. Returns true on success.
+async function refreshModels(key) {
+  const fetched = await fetchModels(key);
+  if (!fetched.length) return false;
+  const prev = settings.model;
+  models = fetched;
+  if (!modelExists(prev)) settings.model = models[0].id;
+  populateModelSelects();
+  els.modelSelect.value = settings.model;
+  els.modelQuick.value = settings.model;
+  return true;
 }
 
 // Switch model from the chat bar without opening settings. Persists immediately.
@@ -220,11 +272,35 @@ function wireEvents() {
 
   els.contextBtn.addEventListener("click", toggleAutoContext);
   els.eyesBtn.addEventListener("click", toggleEyes);
+  els.themeBtn.addEventListener("click", cycleTheme);
   window.addEventListener("pagehide", () => { if (eyesOn) Eyes.detach(); });
   els.clearBtn.addEventListener("click", clearChat);
   els.settingsBtn.addEventListener("click", () => showSettings(els.settingsView.classList.contains("hidden")));
   els.saveSettingsBtn.addEventListener("click", saveSettings);
   els.modelQuick.addEventListener("change", onQuickModelChange);
+}
+
+// ---- Theme ----
+const THEMES = ["auto", "dark", "light"];
+const THEME_ICON = { auto: "🌓", dark: "🌙", light: "☀️" };
+let themeIdx = 0;
+
+function applyTheme(t) {
+  if (t === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  els.themeBtn.textContent = THEME_ICON[t] || "🌓";
+}
+
+function initTheme(stored) {
+  themeIdx = Math.max(0, THEMES.indexOf(stored));
+  applyTheme(THEMES[themeIdx]);
+}
+
+async function cycleTheme() {
+  themeIdx = (themeIdx + 1) % THEMES.length;
+  const t = THEMES[themeIdx];
+  applyTheme(t);
+  await chrome.storage.local.set({ theme: t });
 }
 
 // ---- Settings ----
@@ -237,12 +313,30 @@ async function saveSettings() {
   const key = els.apiKeyInput.value.trim();
   const model = els.modelSelect.value;
   if (!key) { els.settingsStatus.textContent = "Введіть API ключ."; return; }
+
+  // Validate the key with a live ListModels call before committing.
+  els.saveSettingsBtn.disabled = true;
+  els.settingsStatus.textContent = "Перевірка ключа…";
+  try {
+    await refreshModels(key); // throws on a bad key
+  } catch (err) {
+    els.saveSettingsBtn.disabled = false;
+    const m = err?.status === 400 || err?.status === 403
+      ? "Ключ недійсний або без доступу."
+      : "Не вдалося перевірити ключ: " + (err?.message || err);
+    els.settingsStatus.textContent = "✗ " + m;
+    return;
+  }
+
   settings.apiKey = key;
-  settings.model = model;
-  els.modelQuick.value = model;
-  await chrome.storage.local.set({ apiKey: key, model });
-  els.settingsStatus.textContent = "Збережено ✓";
-  setTimeout(() => { els.settingsStatus.textContent = ""; showSettings(false); }, 700);
+  // Keep the user's chosen model if it survived the refresh; else the select's.
+  if (modelExists(model)) settings.model = model;
+  els.modelSelect.value = settings.model;
+  els.modelQuick.value = settings.model;
+  await chrome.storage.local.set({ apiKey: key, model: settings.model });
+  els.saveSettingsBtn.disabled = false;
+  els.settingsStatus.textContent = "Ключ дійсний ✓";
+  setTimeout(() => { els.settingsStatus.textContent = ""; showSettings(false); }, 800);
 }
 
 // ---- Images ----
@@ -435,10 +529,23 @@ async function runTurn(parts) {
     scrollDown();
   };
 
+  // Live streaming target: the typing bubble renders tokens as they arrive;
+  // reset() flips it back to animated dots between model turns.
+  let lastUsage = null;
+  const live = {
+    token: (text) => {
+      stopDots(typingEl);
+      typingEl.className = "msg gemini";
+      typingEl.innerHTML = renderMarkdown(text);
+      scrollDown();
+    },
+    reset: () => startDots(typingEl),
+    usage: (u) => { if (u) lastUsage = u; },
+  };
+
   try {
-    const reply = await callGemini(onStep);
-    removeTyping(typingEl);
-    appendMessage(reply, "gemini");
+    const { text: reply, usage } = await callGemini(onStep, live);
+    finalizeStream(typingEl, reply, usage || lastUsage);
     history.push({ role: "model", parts: [{ text: reply }] });
     setGroupState("done");
   } catch (err) {
@@ -477,20 +584,25 @@ const SYSTEM_PROMPT = `You are an autonomous browser agent embedded in a Chrome 
 - type(text, into?): type into a field (optionally located by label/placeholder), return the page with any autocomplete suggestions.
 - look(): capture a screenshot and SEE the rendered page. For UI not present in the page text (open dropdowns, custom widgets, visual state).
 - read_console(): the tab's console logs and network requests; available only when the user has enabled eye mode.
-- run_js(code): evaluate JavaScript in the page's main world and return the value — your most powerful tool for SPA (Vue/React) widgets.
+- dom_map(): a structured list of everything you can act on RIGHT NOW — every clickable element's visible text, every option/menu-item/checkbox currently shown (with checked state), and every input with its label. Captures open dropdowns and filter overlays that read_page misses. This is how you SEE a widget's real choices.
+- run_js(code): evaluate JavaScript in the page's main world and return the value — a last resort for acting on the DOM when the tools above cannot.
 
-## How to work
+## How to work — think first, never guess
 1. Act yourself with tools. Never tell the user to perform the steps manually.
-2. Target sites are usually SPAs: filter options are often NOT in the page text or URL. Do not guess query-string parameters. Drive the UI — click the filter (e.g. "Region"), then look() to see the options, then click the exact option by its visible text.
-3. When click/type by visible text fail (custom chips, dropdowns, shadow DOM), use run_js to act on the DOM directly. Examples:
-   - open a filter: run_js("[...document.querySelectorAll('button,[role=button]')].find(e=>e.textContent.trim()=='Статус')?.click()")
-   - list the options that appeared: run_js("[...document.querySelectorAll('li,label,.option')].map(e=>e.textContent.trim()).filter(Boolean)")
-   - read the result count: run_js("document.querySelector('.search-count, .results-count')?.innerText || document.body.innerText.match(/Знайдено[^\\n]*/)?.[0]")
-   After any DOM-changing run_js, call read_page() or look() to see the new state.
-4. Use look() sparingly — only when you need to see something unavailable from read_page()/run_js — to avoid exhausting rate limits.
-5. If a tool returns an error or an approach fails, change approach. Never repeat an identical tool call.
-6. After an action that changes the view, verify with read_page()/run_js/look() that the intended state (e.g. applied filters) is actually in effect.
-7. Keep going until you have the EXACT answer requested (e.g. a result count): read the results page and report the precise number. run_js is the most reliable way to read it.
+2. START every task with a one-line plan: state the goal and the first filter/step. Then act. Re-plan in one line whenever a step surprises you.
+3. NEVER guess. This means:
+   - NEVER guess CSS selectors or element ids. On SPAs (Vue/React) ids like \`#v-4\`, \`v-7\` are auto-generated and meaningless — probing them wastes steps and always fails.
+   - NEVER guess query-string params or API URLs (e.g. \`/api/search/...\`). You do not know the site's API; inventing endpoints returns garbage.
+   - NEVER guess a filter's value. Open the filter, then READ the real options.
+4. The reliable loop for any filter/widget:
+   a. click("Region") (or the chip's visible label) to open it.
+   b. dom_map() to SEE the exact options that appeared.
+   c. click the option by its EXACT visible text from the map.
+   d. verify with read_page() or dom_map() that it is applied.
+5. Prefer click / type / dom_map over run_js. Reach for run_js ONLY when those genuinely cannot do it, and even then: first run_js that ENUMERATES (lists candidate texts), then act on a matched element — do not fire a guessed selector. After any DOM-changing run_js, call dom_map() or read_page().
+6. Use look() sparingly (screenshots cost rate limit) — only for purely visual state no text tool exposes.
+7. If a call errors or yields nothing useful, CHANGE approach — do not repeat the same or a near-identical call. Repeated probing of the same kind means your approach is wrong; step back and re-read with dom_map().
+8. You have a limited step budget. Spend steps on observe→act→verify, not on blind trial. Keep going until you have the EXACT answer (e.g. a precise result count), then stop and report it.
 
 ## Output
 Reply in the user's language (Ukrainian), concisely, and only once you have a factual result. If, after genuine attempts, you truly cannot obtain it, state what you tried and what blocked you — do not fabricate.`;
@@ -555,16 +667,24 @@ function pruneHistoryImages() {
   }
 }
 
-// One generateContent call with tools, auto-retrying on 429/503. onInfo(label)
-// logs waits. Returns the candidate.
-async function geminiOnce(onInfo) {
-  const url = `${API_BASE}/${encodeURIComponent(settings.model)}:generateContent`;
+// One streaming generateContent call with tools. Streams answer text through
+// onToken(fullText); auto-retries on 429/503. Returns { parts, usage }.
+// The idle watchdog aborts only when NO chunk arrives for REQUEST_IDLE_MS —
+// each streamed chunk resets it, so a slow model that keeps producing tokens
+// never hits the old 60s wall.
+async function geminiStream(onToken, onInfo) {
+  const url = `${API_BASE}/${encodeURIComponent(settings.model)}:streamGenerateContent?alt=sse`;
   pruneHistoryImages();
+  const budget = THINKING_BUDGET[settings.model];
 
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
     currentController = controller;
-    const idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
+    let idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
+    const resetIdle = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => controller.abort(), REQUEST_IDLE_MS);
+    };
     const t0 = Date.now();
 
     let resp;
@@ -576,6 +696,7 @@ async function geminiOnce(onInfo) {
           contents: history,
           tools: [{ function_declarations: Tools.declarations }],
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          ...(budget ? { generationConfig: { thinkingConfig: { thinkingBudget: budget } } } : {}),
         }),
         signal: controller.signal,
       });
@@ -587,49 +708,100 @@ async function geminiOnce(onInfo) {
       e.retryable = true;
       throw e;
     }
+
+    // Non-2xx: read the error body and maybe retry on rate limit / overload.
+    if (!resp.ok) {
+      clearTimeout(idle);
+      currentController = null;
+      let body = null;
+      try { body = await resp.json(); } catch (_) {}
+      if ((resp.status === 429 || resp.status === 503) && attempt < MAX_RETRIES) {
+        const wait = Math.min(retryDelayMs(body) ?? 2000 * 2 ** attempt, 60000);
+        log("rate-limited, retry in", wait, "ms");
+        onInfo && onInfo(`⏳ ліміт запитів, чекаю ${Math.round(wait / 1000)} с…`);
+        await abortableSleep(wait);
+        continue;
+      }
+      throw buildApiError(resp.status, errMessage(body, `HTTP ${resp.status}`));
+    }
+
+    // Parse the Server-Sent Events stream: one JSON chunk per `data:` line.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let textAcc = "";
+    const fcParts = [];
+    let usage = null;
+    let blockReason = null;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        resetIdle();
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith("data:")) continue;
+          const json = line.slice(5).trim();
+          if (!json || json === "[DONE]") continue;
+          let chunk;
+          try { chunk = JSON.parse(json); } catch (_) { continue; }
+          if (chunk.usageMetadata) usage = chunk.usageMetadata;
+          if (chunk.promptFeedback?.blockReason) blockReason = chunk.promptFeedback.blockReason;
+          const cand = chunk.candidates?.[0];
+          for (const part of cand?.content?.parts || []) {
+            if (part.thought) continue; // don't surface the model's private thinking
+            if (part.functionCall) {
+              fcParts.push(part); // keep the whole part (preserves thoughtSignature)
+            } else if (typeof part.text === "string") {
+              textAcc += part.text;
+              onToken && onToken(textAcc);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      clearTimeout(idle);
+      currentController = null;
+      if (controller.signal.aborted) throw makeAbortError();
+      const e = new Error("Обрив потоку: " + (err?.message || err));
+      e.retryable = true;
+      throw e;
+    }
     clearTimeout(idle);
     currentController = null;
-    log("response", resp.status, `in ${Date.now() - t0}ms`);
+    log("stream done", `in ${Date.now() - t0}ms`, "tokens", usage?.totalTokenCount ?? "?");
 
-    if (resp.ok) {
-      const data = await resp.json();
-      const cand = data.candidates?.[0];
-      if (!cand) {
-        if (data.promptFeedback?.blockReason) {
-          throw new Error("Запит заблоковано: " + data.promptFeedback.blockReason);
-        }
-        const e = new Error("Порожня відповідь моделі.");
-        e.retryable = true;
-        throw e;
-      }
-      return cand;
+    if (blockReason) throw new Error("Запит заблоковано: " + blockReason);
+    const parts = [];
+    if (textAcc) parts.push({ text: textAcc });
+    for (const p of fcParts) parts.push(p);
+    if (!parts.length) {
+      const e = new Error("Порожня відповідь моделі.");
+      e.retryable = true;
+      throw e;
     }
-
-    // Error: parse body and maybe retry on rate limit / overload.
-    let body = null;
-    try { body = await resp.json(); } catch (_) {}
-    if ((resp.status === 429 || resp.status === 503) && attempt < MAX_RETRIES) {
-      const wait = Math.min(retryDelayMs(body) ?? 2000 * 2 ** attempt, 60000);
-      log("rate-limited, retry in", wait, "ms");
-      onInfo && onInfo(`⏳ ліміт запитів, чекаю ${Math.round(wait / 1000)} с…`);
-      await abortableSleep(wait);
-      continue;
-    }
-    throw buildApiError(resp.status, errMessage(body, `HTTP ${resp.status}`));
+    return { parts, usage };
   }
 }
 
 // Agentic loop: let the model call browser tools until it returns a final
 // answer. onStep(label) logs each tool step as a persistent line in the chat.
-async function callGemini(onStep) {
+async function callGemini(onStep, live) {
   const seen = new Map(); // tool-call signature -> count, to break loops
 
   for (let i = 0; i < MAX_TOOL_STEPS; i++) {
-    const cand = await geminiOnce(onStep);
-    const parts = cand.content?.parts || [];
+    live && live.reset(); // show the "typing" dots while this model turn streams
+    const { parts, usage } = await geminiStream(live ? live.token : null, onStep);
+    live && live.usage(usage);
     const calls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
 
     if (calls.length) {
+      // A tool turn: any streamed text was interim "thinking" — drop it so it
+      // doesn't linger in the chat; the final answer streams on a later turn.
+      live && live.reset();
       // Echo the model turn verbatim (keeps each part's thoughtSignature, which
       // Gemini 3+ requires), then run the tools and feed results back.
       history.push({ role: "model", parts });
@@ -665,7 +837,7 @@ async function callGemini(onStep) {
     }
 
     const text = parts.map((p) => p.text || "").join("").trim();
-    if (text) return text;
+    if (text) return { text, usage };
     const e = new Error("Порожня відповідь моделі.");
     e.retryable = true;
     throw e;
@@ -755,7 +927,7 @@ function appendErrorMessage(err, parts) {
 
     // On overload, offer a one-click switch to each other model.
     if (err.retryable === true) {
-      for (const m of MODELS) {
+      for (const m of models) {
         if (m.id === settings.model) continue;
         actions.appendChild(
           makeErrBtn("→ " + m.label, async () => {
@@ -790,22 +962,84 @@ function retryTurn(errDiv, parts) {
 
 function appendTyping() {
   const div = document.createElement("div");
+  els.chatLog.appendChild(div);
+  startDots(div);
+  scrollDown();
+  return div;
+}
+
+// Turn an element into the animated "друкую… Ns" indicator.
+function startDots(div) {
   div.className = "msg gemini typing";
-  const t0 = Date.now();
+  div.innerHTML = "";
+  if (!div._t0) div._t0 = Date.now();
   const tick = () => {
-    const s = Math.round((Date.now() - t0) / 1000);
+    const s = Math.round((Date.now() - div._t0) / 1000);
     div.textContent = s < 1 ? "друкую…" : `друкую… ${s}с`;
   };
   tick();
+  if (div._timer) clearInterval(div._timer);
   div._timer = setInterval(tick, 1000);
-  els.chatLog.appendChild(div);
-  scrollDown();
-  return div;
+}
+
+function stopDots(div) {
+  if (div?._timer) { clearInterval(div._timer); div._timer = null; }
+  div?.classList.remove("typing");
 }
 
 function removeTyping(div) {
   if (div?._timer) clearInterval(div._timer);
   div?.remove();
+}
+
+// Convert the live streaming bubble into a finished model message: clean render
+// + copy button + token note.
+function finalizeStream(div, text, usage) {
+  stopDots(div);
+  div.className = "msg gemini";
+  div.innerHTML = renderMarkdown(text);
+  addCopyButtons(div, text);
+  if (usage) appendUsage(div, usage);
+  scrollDown();
+}
+
+// Copy affordances: one for the whole message, one per code block.
+function addCopyButtons(div, rawText) {
+  const btn = document.createElement("button");
+  btn.className = "copy-msg";
+  btn.title = "Копіювати відповідь";
+  btn.textContent = "⧉";
+  btn.addEventListener("click", () => copyText(rawText, btn));
+  div.appendChild(btn);
+
+  div.querySelectorAll("pre").forEach((pre) => {
+    const b = document.createElement("button");
+    b.className = "copy-code";
+    b.title = "Копіювати код";
+    b.textContent = "⧉";
+    b.addEventListener("click", () => copyText(pre.innerText, b));
+    pre.appendChild(b);
+  });
+}
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(
+    () => {
+      const old = btn.textContent;
+      btn.textContent = "✓";
+      setTimeout(() => { btn.textContent = old; }, 1000);
+    },
+    () => {}
+  );
+}
+
+function appendUsage(div, usage) {
+  const total = usage?.totalTokenCount;
+  if (!total) return;
+  const s = document.createElement("div");
+  s.className = "tok";
+  s.textContent = `~${total} токенів`;
+  div.appendChild(s);
 }
 
 function setBusy(b) {

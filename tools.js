@@ -70,9 +70,15 @@ const Tools = (() => {
       parameters: { type: "object", properties: {} },
     },
     {
+      name: "dom_map",
+      description:
+        "Return a structured map of what you can act on RIGHT NOW: every clickable element's visible text, every option/menu-item/checkbox/radio currently shown (with checked state and value), and every input with its label and value. Captures open dropdowns and filter overlays that read_page misses. Call this after opening a filter to SEE its real options, then click the one you want by its exact text. Never guess options — read them here.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
       name: "run_js",
       description:
-        "Run a JavaScript expression in the page's MAIN world and return its value. Use this when click/type by text fail on SPA (Vue/React) widgets: directly query and act on the DOM, e.g. document.querySelector('button.filter').click(), read dynamic values like document.querySelector('.results-count').innerText, or inspect elements. Requires eye mode (👁️). After a call that changes the DOM, follow with read_page or look to see the new state.",
+        "Last resort: run a JavaScript expression in the page's MAIN world and return its value. Prefer click/type/dom_map. Use only when those cannot act on a widget. Do NOT fire guessed selectors or ids (SPA ids like #v-4 are auto-generated); instead first ENUMERATE candidates (list element texts) then act on a match. Requires eye mode (👁️). After a call that changes the DOM, follow with dom_map or read_page.",
       parameters: {
         type: "object",
         properties: {
@@ -157,6 +163,77 @@ const Tools = (() => {
     return res?.result || { error: "Failed to read the page" };
   }
 
+  // ---- Interactive map (runs in the page) ----
+  // Lists actionable TEXT targets currently on screen — including options in an
+  // open dropdown/overlay — so the agent reads real choices instead of guessing
+  // selectors or option values.
+  function domMapFn() {
+    const vis = (el) =>
+      (el.offsetParent !== null || el.getClientRects().length > 0) &&
+      getComputedStyle(el).visibility !== "hidden";
+    const txt = (el) =>
+      (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 70);
+
+    // Clickable targets (shallow text only, so a wrapper doesn't swallow its
+    // children's labels).
+    const clickSeen = new Set();
+    const clickable = [];
+    for (const el of document.querySelectorAll(
+      'button, a[href], [role=button], [role=tab], [onclick], summary, [class*=chip i], [class*=filter i]'
+    )) {
+      if (clickable.length >= 70 || !vis(el)) continue;
+      let t = "";
+      for (const n of el.childNodes) if (n.nodeType === 3) t += n.textContent;
+      t = (t.trim() || txt(el)).replace(/\s+/g, " ").slice(0, 70);
+      if (!t || clickSeen.has(t)) continue;
+      clickSeen.add(t);
+      clickable.push(t);
+    }
+
+    // Choices currently shown (dropdown/overlay options, checkboxes, radios).
+    const optSeen = new Set();
+    const options = [];
+    for (const el of document.querySelectorAll(
+      '[role=option], [role=menuitem], [role=radio], [role=checkbox], li, label, option'
+    )) {
+      if (options.length >= 80 || !vis(el)) continue;
+      const t = txt(el);
+      if (!t || t.length > 70 || optSeen.has(t)) continue;
+      const input = el.matches("option")
+        ? el
+        : el.querySelector("input[type=checkbox],input[type=radio]");
+      const checked =
+        el.getAttribute("aria-checked") === "true" ||
+        el.getAttribute("aria-selected") === "true" ||
+        (input && (input.checked || input.selected));
+      optSeen.add(t);
+      options.push(checked ? { text: t, checked: true } : { text: t });
+    }
+
+    // Inputs with their labels/values.
+    const inputs = [];
+    for (const el of document.querySelectorAll(
+      'input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable=true]'
+    )) {
+      if (inputs.length >= 40 || !vis(el)) continue;
+      inputs.push({
+        label: (el.getAttribute("aria-label") || el.placeholder || el.name || el.id || "")
+          .toString().trim().slice(0, 60),
+        value: (el.value || el.textContent || "").toString().trim().slice(0, 50),
+      });
+    }
+
+    return { url: location.href, title: document.title, clickable, options, inputs };
+  }
+
+  async function domMap(tabId) {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: domMapFn,
+    });
+    return res?.result || { error: "Failed to map the page" };
+  }
+
   function waitComplete(tabId) {
     return new Promise((resolve) => {
       let done = false;
@@ -182,6 +259,9 @@ const Tools = (() => {
       switch (name) {
         case "read_page":
           return await snapshot(tabId);
+
+        case "dom_map":
+          return await domMap(tabId);
 
         case "navigate": {
           const url = String(args?.url || "");
@@ -310,6 +390,7 @@ const Tools = (() => {
   function label(name, args) {
     switch (name) {
       case "read_page": return "читаю сторінку…";
+      case "dom_map": return "мапа елементів…";
       case "navigate": return "переходжу: " + (args?.url || "");
       case "click": return "клік: " + (args?.text || "");
       case "type": return `ввід «${args?.text || ""}»` + (args?.into ? ` → ${args.into}` : "");
