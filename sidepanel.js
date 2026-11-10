@@ -261,6 +261,22 @@ function setMascot(state) {
   }
 }
 
+// Chrome refuses tabGroups edits while a tab is mid-drag ("Tabs cannot be
+// edited right now"). The group title is cosmetic, so retry a few times to
+// catch the moment the drag ends, then give up silently on that transient.
+const DRAG_LOCK_RE = /cannot be edited|dragg/i;
+
+async function updateGroupTitle(groupId, title, tries = 4) {
+  for (let i = 0; ; i++) {
+    try {
+      return await chrome.tabGroups.update(groupId, { title });
+    } catch (err) {
+      if (i >= tries - 1 || !DRAG_LOCK_RE.test(err?.message || "")) throw err;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+}
+
 async function setGroupState(state) {
   setMascot(state);
   const title = GROUP_STATES[state] || GROUP_NAME;
@@ -269,9 +285,13 @@ async function setGroupState(state) {
       await ensureAssistantGroup();
       if (!(await groupIsValid(assistant.groupId))) return;
     }
-    await chrome.tabGroups.update(assistant.groupId, { title });
+    await updateGroupTitle(assistant.groupId, title);
   } catch (err) {
-    console.warn("setGroupState:", err?.message || err);
+    // Swallow the drag-lock transient — the title is cosmetic and will catch
+    // up on the next state change. Log anything else.
+    if (!DRAG_LOCK_RE.test(err?.message || "")) {
+      console.warn("setGroupState:", err?.message || err);
+    }
   }
 }
 
