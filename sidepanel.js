@@ -61,6 +61,7 @@ let history = []; // [{ role: 'user'|'model', parts: [...] }] — the API conver
 let transcript = []; // display items for re-render: {role:'user',text,imgCount}|{role:'gemini',text,tokens}
 let sessions = {}; // id -> { id, title, updatedAt, history, transcript }
 let sessionId = null; // active session id
+let windowId = null; // the browser window this side panel lives in (sessions are per-window)
 let pendingImages = []; // [{ mimeType, data(base64), url }]
 let pageContext = null; // { url, title, text } or null
 let busy = false;
@@ -125,9 +126,12 @@ init();
 async function init() {
   populateModelSelects();
 
+  windowId = await currentWindowId();
+  await pruneWindowSessions();
+
   const stored = await chrome.storage.local.get([
     "apiKey", "model", "theme", "confirmActions", "macros",
-    "sessions", "activeSessionId",
+    "sessions", "activeSessionId", "windowSessions",
   ]);
   settings.apiKey = stored.apiKey || "";
   settings.model = modelExists(stored.model) ? stored.model : DEFAULT_MODEL;
@@ -140,10 +144,15 @@ async function init() {
   macros = stored.macros || {};
   populateMacros();
 
-  // Restore chat sessions. Open the last active one, or start a fresh session.
+  // Restore chat sessions. Sessions are per-window: resume the chat this window
+  // owned before (panel reopened in the same window), otherwise start a fresh
+  // one. A brand-new browser window has no mapping, so it gets its own chat
+  // instead of inheriting whatever was last active in another window.
   sessions = stored.sessions || {};
-  if (stored.activeSessionId && sessions[stored.activeSessionId]) {
-    loadSessionInto(stored.activeSessionId);
+  const mine = windowId != null ? stored.windowSessions?.[windowId] : null;
+  if (mine && sessions[mine]) {
+    loadSessionInto(mine);
+    await setActiveSession();
   } else {
     await newSession(false); // false = nothing to persist from yet
   }
@@ -730,8 +739,46 @@ function persistActive() {
     history: persistableHistory(),
     transcript: transcript.slice(-80),
   };
-  chrome.storage.local.set({ sessions, activeSessionId: sessionId });
+  chrome.storage.local.set({ sessions });
+  setActiveSession();
   populateSessions();
+}
+
+// Record the active session FOR THIS WINDOW. The side panel is a separate
+// instance per browser window, but chrome.storage is shared, so we keep a
+// windowId -> sessionId map. A fresh window with no mapping starts its own
+// chat instead of inheriting whatever was last active elsewhere.
+async function currentWindowId() {
+  try { return (await chrome.windows.getCurrent()).id ?? null; }
+  catch { return null; }
+}
+
+async function setActiveSession() {
+  if (!sessionId) return;
+  const patch = { activeSessionId: sessionId }; // kept for backward-compat
+  if (windowId != null) {
+    const { windowSessions } = await chrome.storage.local.get("windowSessions");
+    const map = windowSessions || {};
+    map[windowId] = sessionId;
+    patch.windowSessions = map;
+  }
+  await chrome.storage.local.set(patch);
+}
+
+// Drop windowId -> sessionId entries for windows that no longer exist, so the
+// map doesn't grow without bound across a long browser run.
+async function pruneWindowSessions() {
+  try {
+    const { windowSessions } = await chrome.storage.local.get("windowSessions");
+    if (!windowSessions) return;
+    const wins = await chrome.windows.getAll();
+    const live = new Set(wins.map((w) => w.id));
+    let changed = false;
+    for (const k of Object.keys(windowSessions)) {
+      if (!live.has(Number(k))) { delete windowSessions[k]; changed = true; }
+    }
+    if (changed) await chrome.storage.local.set({ windowSessions });
+  } catch (_) {}
 }
 
 // Give the current conversation a custom name.
@@ -756,7 +803,7 @@ async function deleteSession() {
   await chrome.storage.local.set({ sessions });
   if (rest.length) {
     loadSessionInto(rest[0].id);
-    chrome.storage.local.set({ activeSessionId: sessionId });
+    setActiveSession();
     populateSessions();
   } else {
     await newSession(false);
@@ -791,7 +838,8 @@ async function newSession(persistCurrent) {
   updateContextBadge();
   els.chatLog.innerHTML = WELCOME_HTML;
   updateSendButton();
-  await chrome.storage.local.set({ sessions, activeSessionId: sessionId });
+  await chrome.storage.local.set({ sessions });
+  await setActiveSession();
   populateSessions();
 }
 
@@ -800,7 +848,7 @@ function switchSession(id) {
   if (!id || id === sessionId) return;
   persistActive();
   loadSessionInto(id);
-  chrome.storage.local.set({ activeSessionId: sessionId });
+  setActiveSession();
   populateSessions();
 }
 
